@@ -1,36 +1,23 @@
-from fastapi import FastAPI, Depends, HTTPException, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from supabase import create_client, Client
-from pydantic import BaseModel
-import os
-from dotenv import load_dotenv
 
-load_dotenv()
-url = os.environ.get("https://frbcjkctbjgnfzvoxzby.supabase.co")
-key = os.environ.get("sb_publishable__ZZFBrzlNNaUBWIA1HOmcg_8gT98tvC")
-supabase: Client = create_client(url, key)
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from app.routes import auth, projects
 
 app = FastAPI(title="HackEval Backend")
-security = HTTPBearer()
 
-async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    token = credentials.credentials
-    try:
-        user = supabase.auth.get_user(token)
-        if not user:
-             raise HTTPException(status_code=401, detail="Invalid Authentication Token")
-        return user
-    except Exception as e:
-        raise HTTPException(status_code=401, detail=str(e))
+# CORS Middleware (Allow Frontend to talk to Backend)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, replace with specific domain
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Register Routers
+app.include_router(auth.router, tags=["Authentication"])
+# app.include_router(projects.router, tags=["Projects"]) # Uncomment when projects service is ready
 
 @app.get("/")
 def health_check():
     return {"status": "ok", "message": "Backend is running"}
-
-@app.get("/api/v1/profile")
-def get_user_profile(user = Depends(get_current_user)):
-    return {
-        "id": user.user.id,
-        "email": user.user.email,
-        "message": "Welcome to the protected zone!"
-    }

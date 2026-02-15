@@ -44,12 +44,25 @@ const LoginPage = ({ onLogin = () => { }, onNavigateBack = () => { } }) => {
         }, 1500);
     };
 
-    const handleSocialLogin = (provider) => {
+    const handleSocialLogin = async (provider) => {
         setIsLoading(true);
-        setTimeout(() => {
+        setError(null);
+        try {
+            if (provider === 'google') {
+                const { signInWithGoogle } = await import('../services/auth');
+                await signInWithGoogle();
+                // Redirect happens automatically
+            } else {
+                // Not implemented
+                setTimeout(() => {
+                    setIsLoading(false);
+                    setError("GitHub login not implemented yet.");
+                }, 1000);
+            }
+        } catch (err) {
             setIsLoading(false);
-            onLogin();
-        }, 1500);
+            setError(err.message || "Login failed");
+        }
     };
 
     return (
@@ -67,9 +80,9 @@ const LoginPage = ({ onLogin = () => { }, onNavigateBack = () => { } }) => {
                     className="cursor-pointer flex items-center space-x-2 w-fit opacity-80 hover:opacity-100 transition-opacity"
                 >
                     <div className="w-8 h-8 bg-white/10 border border-white/10 rounded-lg flex items-center justify-center">
-                        <span className="text-white font-bold text-xl">E</span>
+                        <span className="text-white font-bold text-xl">H</span>
                     </div>
-                    <span className="text-xl font-bold">EvalAI</span>
+                    <span className="text-xl font-bold">HackEval</span>
                 </div>
             </nav>
 
