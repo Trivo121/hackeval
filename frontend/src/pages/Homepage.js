@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../services/auth';
+import { getProjects } from '../services/api';
 import { Plus, Folder, Clock, ChevronRight, LogOut, Search, Filter, LayoutGrid, List } from 'lucide-react';
 import ProfileModal from '../components/ProfileModal';
 
@@ -18,14 +19,11 @@ const Homepage = ({ user: initialUser, onCreateProject, onSignOut }) => {
     const fetchProjects = async () => {
         try {
             setLoading(true);
-            const { data, error } = await supabase
-                .from('projects')
-                .select('*')
-                .eq('owner_user_id', user.id)
-                .order('created_at', { ascending: false });
+            const { data: { session } } = await supabase.auth.getSession();
+            if (!session) return;
 
-            if (error) throw error;
-            setProjects(data || []);
+            const result = await getProjects(session.access_token);
+            setProjects(result.projects || []);
         } catch (error) {
             console.error('Error fetching projects:', error);
         } finally {
@@ -177,8 +175,8 @@ const Homepage = ({ user: initialUser, onCreateProject, onSignOut }) => {
                                         <h3 className="text-lg font-bold truncate pr-4 text-gray-100 group-hover:text-white transition-colors">{project.project_name}</h3>
                                         <div className="flex items-center gap-2 mt-2">
                                             <div className={`inline-flex px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${project.status === 'completed' ? 'bg-green-500/10 text-green-400 border border-green-500/20' :
-                                                    project.status === 'active' ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' :
-                                                        'bg-gray-500/10 text-gray-400 border border-white/10'
+                                                project.status === 'active' ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' :
+                                                    'bg-gray-500/10 text-gray-400 border border-white/10'
                                                 }`}>
                                                 {project.status}
                                             </div>

@@ -16,7 +16,7 @@ app.add_middleware(
 
 # Register Routers
 app.include_router(auth.router, tags=["Authentication"])
-# app.include_router(projects.router, tags=["Projects"]) # Uncomment when projects service is ready
+app.include_router(projects.router, tags=["Projects"])
 
 @app.get("/")
 def health_check():

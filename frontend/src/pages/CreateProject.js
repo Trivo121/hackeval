@@ -2,13 +2,16 @@ import React, { useState, useEffect } from 'react';
 import {
     ArrowRight, ArrowLeft, CheckCircle, Plus, Trash2,
     Layout, Target, HardDrive, FileText, PieChart,
-    AlertCircle, ChevronRight, X, Play
+    AlertCircle, ChevronRight, X, Play, Loader2
 } from 'lucide-react';
+import { supabase } from '../services/auth';
+import { createProject, scanDrive } from '../services/api';
 
 const CreateProjectPage = ({ onBack, onLaunch }) => {
     // --- STATE MANAGEMENT ---
     const [currentStep, setCurrentStep] = useState(1);
     const [isAnimating, setIsAnimating] = useState(false);
+    const [isLaunching, setIsLaunching] = useState(false);
 
     const [formData, setFormData] = useState({
         // Identity
@@ -49,6 +52,45 @@ const CreateProjectPage = ({ onBack, onLaunch }) => {
         }, 200);
     };
 
+    const handleLaunch = async () => {
+        if (formData.driveStatus !== 'verified') return;
+
+        setIsLaunching(true);
+        try {
+            // 1. Get Auth Token
+            const { data: { session } } = await supabase.auth.getSession();
+            if (!session) throw new Error("No active session");
+
+            // 2. Prepare Payload
+            const payload = {
+                project_name: formData.projectName,
+                description: formData.projectDesc,
+                drive_folder_url: formData.driveLink,
+                track_mode: formData.trackMode,
+                theme_desc: formData.trackMode === 'theme' ? formData.themeDesc : null,
+                problem_statements: formData.trackMode === 'ps'
+                    ? formData.problemStatements.map(ps => ({ title: ps.title, description: ps.desc }))
+                    : [],
+                scoring_criteria: formData.criteria.map(c => ({ name: c.name, weight: c.weight })),
+                auto_categorization_enabled: true,
+                plagiarism_detection_enabled: true
+            };
+
+            // 3. Call API
+            const result = await createProject(session.access_token, payload);
+            console.log("Project Created:", result);
+
+            // 4. Navigate
+            onLaunch();
+
+        } catch (error) {
+            console.error("Launch Failed:", error);
+            alert(`Failed to create project: ${error.message}`);
+        } finally {
+            setIsLaunching(false);
+        }
+    };
+
     // Logic: Criteria Math
     const totalWeight = formData.criteria.reduce((acc, curr) => acc + parseInt(curr.weight || 0), 0);
     const isWeightValid = totalWeight === 100;
@@ -68,12 +110,36 @@ const CreateProjectPage = ({ onBack, onLaunch }) => {
         });
     };
 
-    // Source: Simulate GDrive Connection
-    const checkGDrive = () => {
+    // Source: GDrive Connection
+    const checkGDrive = async () => {
+        const drivePattern = /drive\.google\.com\/drive\/folders\/([a-zA-Z0-9_-]+)/;
+        const match = formData.driveLink.match(drivePattern);
+
+        if (!match) {
+            alert("Invalid Google Drive URL.\nUse a link like: https://drive.google.com/drive/folders/...");
+            return;
+        }
+
+        const folderId = match[1];
         setFormData(prev => ({ ...prev, driveStatus: 'checking' }));
-        setTimeout(() => {
-            setFormData(prev => ({ ...prev, driveStatus: 'verified', fileCount: 42 }));
-        }, 1500);
+
+        try {
+            const { data: { session } } = await supabase.auth.getSession();
+            if (!session) throw new Error("No active session");
+
+            const result = await scanDrive(session.access_token, folderId);
+
+            setFormData(prev => ({
+                ...prev,
+                driveStatus: 'verified',
+                fileCount: result.total_files
+            }));
+
+        } catch (error) {
+            console.error("Drive Scan Failed:", error);
+            setFormData(prev => ({ ...prev, driveStatus: 'error' }));
+            alert("Failed to scan Drive folder.\nMake sure the folder is set to 'Anyone with the link can view'.");
+        }
     };
 
     return (
@@ -331,12 +397,21 @@ const CreateProjectPage = ({ onBack, onLaunch }) => {
                             </button>
                         ) : (
                             <button
-                                onClick={onLaunch}
+                                onClick={handleLaunch}
                                 className={`px-8 py-3 bg-gradient-to-r from-white to-gray-400 text-black rounded-full text-sm font-bold transition-all flex items-center space-x-2 ${formData.driveStatus !== 'verified' ? 'opacity-50 cursor-not-allowed' : 'hover:scale-105'}`}
-                                disabled={formData.driveStatus !== 'verified'}
+                                disabled={formData.driveStatus !== 'verified' || isLaunching}
                             >
-                                <span>Launch Evaluation</span>
-                                <Play className="w-4 h-4 fill-current" />
+                                {isLaunching ? (
+                                    <>
+                                        <span>Creating...</span>
+                                        <Loader2 className="w-4 h-4 animate-spin" />
+                                    </>
+                                ) : (
+                                    <>
+                                        <span>Launch Evaluation</span>
+                                        <Play className="w-4 h-4 fill-current" />
+                                    </>
+                                )}
                             </button>
                         )}
                     </div>
