@@ -5,13 +5,14 @@ import {
     AlertCircle, ChevronRight, X, Play, Loader2
 } from 'lucide-react';
 import { supabase } from '../services/auth';
-import { createProject, scanDrive } from '../services/api';
+import { createProject, scanDrive, startScan, startProcessing } from '../services/api';
 
 const CreateProjectPage = ({ onBack, onLaunch }) => {
     // --- STATE MANAGEMENT ---
     const [currentStep, setCurrentStep] = useState(1);
     const [isAnimating, setIsAnimating] = useState(false);
     const [isLaunching, setIsLaunching] = useState(false);
+    const [launchStep, setLaunchStep] = useState(''); // 'creating' | 'scanning' | 'processing' | ''
 
     const [formData, setFormData] = useState({
         // Identity
@@ -57,11 +58,12 @@ const CreateProjectPage = ({ onBack, onLaunch }) => {
 
         setIsLaunching(true);
         try {
-            // 1. Get Auth Token
             const { data: { session } } = await supabase.auth.getSession();
             if (!session) throw new Error("No active session");
+            const token = session.access_token;
 
-            // 2. Prepare Payload
+            // Step 1: Create project
+            setLaunchStep('creating');
             const payload = {
                 project_name: formData.projectName,
                 description: formData.projectDesc,
@@ -75,19 +77,29 @@ const CreateProjectPage = ({ onBack, onLaunch }) => {
                 auto_categorization_enabled: true,
                 plagiarism_detection_enabled: true
             };
+            const project = await createProject(token, payload);
+            const projectId = project.project_id;
+            console.log("Project Created:", project);
 
-            // 3. Call API
-            const result = await createProject(session.access_token, payload);
-            console.log("Project Created:", result);
+            // Step 2: Scan Drive → store pending submissions in DB
+            setLaunchStep('scanning');
+            const scanResult = await startScan(token, projectId);
+            console.log("Scan Result:", scanResult);
 
-            // 4. Navigate
+            // Step 3: Fire background Docling extraction (returns immediately)
+            setLaunchStep('processing');
+            const procResult = await startProcessing(token, projectId);
+            console.log("Processing Started:", procResult);
+
+            // Navigate to dashboard
             onLaunch();
 
         } catch (error) {
             console.error("Launch Failed:", error);
-            alert(`Failed to create project: ${error.message}`);
+            alert(`Launch failed at step '${launchStep}': ${error.message}`);
         } finally {
             setIsLaunching(false);
+            setLaunchStep('');
         }
     };
 
@@ -403,7 +415,11 @@ const CreateProjectPage = ({ onBack, onLaunch }) => {
                             >
                                 {isLaunching ? (
                                     <>
-                                        <span>Creating...</span>
+                                        <span>
+                                            {launchStep === 'creating' && 'Creating Project...'}
+                                            {launchStep === 'scanning' && 'Scanning Drive...'}
+                                            {launchStep === 'processing' && 'Starting Extraction...'}
+                                        </span>
                                         <Loader2 className="w-4 h-4 animate-spin" />
                                     </>
                                 ) : (

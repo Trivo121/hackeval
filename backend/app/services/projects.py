@@ -57,7 +57,6 @@ async def create_project_in_db(user, project_data: ProjectCreateRequest):
         project_id = new_project["project_id"]
 
         # B. Insert Problem Statements (if any)
-        # Check if 'problem_statements' table exists logic - Assuming it does per user request
         if project_data.problem_statements:
             ps_payload = [
                 {
@@ -66,8 +65,10 @@ async def create_project_in_db(user, project_data: ProjectCreateRequest):
                     "description": ps.description
                 } for ps in project_data.problem_statements
             ]
-            # We wrap this in try/except to catch if table doesn't exist
-            admin_supabase.table("problem_statements").insert(ps_payload).execute()
+            try:
+                admin_supabase.table("problem_statements").insert(ps_payload).execute()
+            except Exception as e:
+                print(f"[Project Create] Skipping problem_statements insert (table may not exist): {e}")
 
 
         # C. Insert Scoring Criteria (if any)
@@ -79,7 +80,11 @@ async def create_project_in_db(user, project_data: ProjectCreateRequest):
                     "weight": sc.weight
                 } for sc in project_data.scoring_criteria
             ]
-            admin_supabase.table("scoring_criteria").insert(sc_payload).execute()
+            try:
+                admin_supabase.table("scoring_criteria").insert(sc_payload).execute()
+            except Exception as e:
+                print(f"[Project Create] Skipping scoring_criteria insert (table may not exist): {e}")
+
 
         return {
             "project_id": project_id,

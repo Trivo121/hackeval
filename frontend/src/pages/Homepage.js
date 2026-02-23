@@ -4,28 +4,37 @@ import { getProjects } from '../services/api';
 import { Plus, Folder, Clock, ChevronRight, LogOut, Search, Filter, LayoutGrid, List } from 'lucide-react';
 import ProfileModal from '../components/ProfileModal';
 
-const Homepage = ({ user: initialUser, onCreateProject, onSignOut }) => {
+const Homepage = ({ user: initialUser, onCreateProject, onSignOut, onOpenProject }) => {
     const [user, setUser] = useState(initialUser);
     const [projects, setProjects] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [fetchError, setFetchError] = useState(null);
     const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
     const [viewMode, setViewMode] = useState('grid');
     const [searchQuery, setSearchQuery] = useState('');
 
     useEffect(() => {
-        if (user) fetchProjects();
-    }, [user]);
+        fetchProjects();
+    }, []); // Run on mount always — don't wait for user prop
 
     const fetchProjects = async () => {
+        setLoading(true);
+        setFetchError(null);
         try {
-            setLoading(true);
             const { data: { session } } = await supabase.auth.getSession();
-            if (!session) return;
-
+            console.log('[fetchProjects] session:', session ? 'EXISTS' : 'NONE');
+            if (!session) {
+                console.warn('[fetchProjects] No session — not fetching');
+                setLoading(false);
+                return;
+            }
+            console.log('[fetchProjects] Calling GET /projects...');
             const result = await getProjects(session.access_token);
+            console.log('[fetchProjects] Result:', result);
             setProjects(result.projects || []);
         } catch (error) {
-            console.error('Error fetching projects:', error);
+            console.error('[fetchProjects] Error:', error);
+            setFetchError(error.message);
         } finally {
             setLoading(false);
         }
@@ -141,6 +150,14 @@ const Homepage = ({ user: initialUser, onCreateProject, onSignOut }) => {
                     <div className="flex justify-center py-20">
                         <div className="w-8 h-8 border-2 border-white/20 border-t-white rounded-full animate-spin" />
                     </div>
+                ) : fetchError ? (
+                    <div className="text-center py-20 border border-dashed border-red-500/20 rounded-3xl bg-red-500/5 mt-8">
+                        <p className="text-red-400 mb-2 font-medium">Failed to load projects</p>
+                        <p className="text-gray-500 text-sm mb-6">{fetchError}</p>
+                        <button onClick={fetchProjects} className="px-4 py-2 bg-white/10 rounded-xl text-sm hover:bg-white/20 transition-colors">
+                            Retry
+                        </button>
+                    </div>
                 ) : filteredProjects.length === 0 ? (
                     /* Empty State */
                     <div className="text-center py-24 border border-dashed border-white/10 rounded-3xl bg-white/[0.02] mt-8 animate-fade-in">
@@ -166,6 +183,7 @@ const Homepage = ({ user: initialUser, onCreateProject, onSignOut }) => {
                         {filteredProjects.map((project, idx) => (
                             <div
                                 key={project.project_id}
+                                onClick={() => onOpenProject && onOpenProject(project.project_id)}
                                 className={`group bg-[#0A0A0A] border border-white/10 hover:border-white/20 hover:bg-white/[0.02] transition-all cursor-pointer relative overflow-hidden ${viewMode === 'grid' ? 'rounded-3xl p-6 flex flex-col h-full hover:shadow-2xl hover:shadow-white/[0.02] hover:-translate-y-1' : 'rounded-2xl p-4 flex items-center gap-6 hover:translate-x-1'
                                     }`}
                                 style={{ animationDelay: `${idx * 0.05}s` }}

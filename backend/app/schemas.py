@@ -54,3 +54,9 @@ class ProjectResponse(BaseModel):
     project_name: str
     status: str
     message: str
+
+
+class ProcessingStartResponse(BaseModel):
+    message: str
+    project_id: str
+    queued: int
