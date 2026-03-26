@@ -66,7 +66,14 @@ async def create_project_in_db(user, project_data: ProjectCreateRequest):
                 } for ps in project_data.problem_statements
             ]
             try:
-                admin_supabase.table("problem_statements").insert(ps_payload).execute()
+                ps_res = admin_supabase.table("problem_statements").insert(ps_payload).execute()
+                # Run embedding generation for these problem statements
+                try:
+                    from app.services.embedding_service import embed_problem_statements
+                    if ps_res.data:
+                        embed_problem_statements(project_id, ps_res.data)
+                except Exception as emb_e:
+                    print(f"[Project Create] Embedding workflow failed: {emb_e}")
             except Exception as e:
                 print(f"[Project Create] Skipping problem_statements insert (table may not exist): {e}")
 

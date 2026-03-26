@@ -92,15 +92,31 @@ async def process_submissions_background(project_id: str) -> None:
             )
 
             if extract_ok:
-                # Mark submission as fully done
+                # Mark extraction as complete
                 try:
                     admin_supabase.table("submissions").update({
-                        "processing_status": "completed",
+                        "processing_status": "extracted",  # Status changed to extracted, not completed yet
                         "updated_at": _now_iso()
                     }).eq("submission_id", submission_id).execute()
-                    print(f"[Worker]    ✅ '{team_name}' → completed")
+                    print(f"[Worker]    ✅ '{team_name}' → extracted. Queuing embedding task.")
+                    
+                    # Queue the embedding task
+                    admin_supabase.table("processing_jobs").insert({
+                        "job_type": "embed_submission_slides",
+                        "related_id": submission_id,
+                        "submission_id": submission_id,
+                        "project_id": project_id,
+                        "status": "queued"
+                    }).execute()
+                    
+                    from app.celery_app import celery_app
+                    celery_app.send_task(
+                        "app.services.embedding_service.embed_submission_slides_task",
+                        args=[submission_id],
+                        queue="embedding"
+                    )
                 except Exception as e:
-                    logger.warning(f"[Worker] Could not mark submission completed: {e}")
+                    logger.warning(f"[Worker] Could not mark submission extracted or queue embedding: {e}")
                 success_count += 1
             else:
                 # Extraction failed → mark submission as failed

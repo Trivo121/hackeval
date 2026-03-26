@@ -195,3 +195,43 @@ async def get_submission_slides(submission_id: str, current_user = Depends(get_c
         .execute()
     )
     return {"slides": slides_res.data or []}
+
+@router.get("/projects/{project_id}/embedding-progress")
+async def get_embedding_progress(project_id: str, current_user = Depends(get_current_user)):
+    """Return real-time metrics on the extraction, embedding, and categorization progress."""
+    try:
+        # Total Submissions
+        total_res = admin_supabase.table("submissions").select("submission_id", count="exact").eq("project_id", project_id).execute()
+        total = total_res.count or 0
+
+        if total == 0:
+            return {"total_submissions": 0, "extraction_complete": 0, "embedding_complete": 0, "categorization_complete": 0}
+
+        # Extracted (or higher)
+        extracted_res = admin_supabase.table("submissions").select("submission_id", count="exact").eq("project_id", project_id).neq("processing_status", "pending").execute()
+        # Anything past 'pending' (e.g., extracted, indexed, categorized) has been extracted
+        extracted = extracted_res.count or 0
+
+        # Categorized
+        cat_res = admin_supabase.table("submissions").select("submission_id", count="exact").eq("project_id", project_id).eq("processing_status", "categorized").execute()
+        categorized = cat_res.count or 0
+
+        # Embedded (Indexed): Look up processing_jobs for this project where job_type='embed_submission_slides' and status='completed'
+        emb_res = admin_supabase.table("processing_jobs").select("job_id", count="exact").eq("project_id", project_id).eq("job_type", "embed_submission_slides").eq("status", "completed").execute()
+        embedded = emb_res.count or 0
+        
+        # Calculate ETA (rough estimate: 2s per remaining extraction, 2s per remaining embedding)
+        remaining_extracts = total - extracted
+        remaining_embeds = total - embedded
+        eta_seconds = (remaining_extracts * 2) + (remaining_embeds * 2)
+
+        return {
+            "total_submissions": total,
+            "extraction_complete": extracted,
+            "embedding_complete": embedded,
+            "categorization_complete": categorized,
+            "eta_seconds": eta_seconds
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+

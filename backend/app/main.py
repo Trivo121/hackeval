@@ -6,9 +6,17 @@ os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
 from app.routes import auth, projects
+from app.services.qdrant_service import init_qdrant_collection
 
-app = FastAPI(title="HackEval Backend")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Initialize Qdrant Collection
+    init_qdrant_collection()
+    yield
+
+app = FastAPI(title="HackEval Backend", lifespan=lifespan)
 
 # CORS Middleware (Allow Frontend to talk to Backend)
 app.add_middleware(
