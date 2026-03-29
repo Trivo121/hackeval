@@ -1,16 +1,3 @@
--- Problem Statements Table Updates
-ALTER TABLE problem_statements 
-ADD COLUMN IF NOT EXISTS qdrant_point_id UUID;
-
-ALTER TABLE problem_statements 
-ADD COLUMN IF NOT EXISTS qdrant_indexed BOOLEAN DEFAULT false;
-
-ALTER TABLE problem_statements 
-ADD COLUMN IF NOT EXISTS qdrant_indexed_at TIMESTAMPTZ;
-
-CREATE INDEX IF NOT EXISTS idx_ps_qdrant_indexed 
-ON problem_statements(qdrant_indexed);
-
 -- Submission Slides Table Updates
 ALTER TABLE submission_slides 
 ADD COLUMN IF NOT EXISTS qdrant_point_id UUID;
