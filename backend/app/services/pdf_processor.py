@@ -31,76 +31,77 @@ logger = logging.getLogger(__name__)
 # Public Entry Point
 # ---------------------------------------------------------------------------
 
-async def process_submissions_background(project_id: str) -> None:
+from app.celery_app import celery_app
+
+@celery_app.task(bind=True, max_retries=3, queue="extraction")
+def process_submission_task(self, submission_id: str, project_id: str) -> None:
     """
-    Main background worker entrypoint.
-    Fetches all 'pending' submissions for the project and processes them
-    one by one through the pipeline starting with Step 1: Fetch.
-    
-    This function is designed to be passed to FastAPI BackgroundTasks.
+    Main background worker entrypoint (Celery Task).
+    Processes a single submission through the pipeline starting with Step 1: Fetch.
     """
     print(f"\n{'='*60}")
-    print(f"[Worker] Starting processing for project_id={project_id}")
+    print(f"[Worker] Starting extraction task for submission_id={submission_id}")
     print(f"{'='*60}")
 
-    # --- Fetch all pending submissions for this project ---
+    # Fetch submission details to get drive_file_id and team_name
     try:
-        submissions_res = (
+        sub_res = (
             admin_supabase
             .table("submissions")
-            .select("submission_id, drive_file_id, drive_file_name, team_name")
-            .eq("project_id", project_id)
-            .eq("processing_status", "pending")
+            .select("drive_file_id, drive_file_name, team_name")
+            .eq("submission_id", submission_id)
+            .single()
             .execute()
         )
-        submissions = submissions_res.data or []
+        if not sub_res.data:
+            print(f"[Worker] ERROR: Submission {submission_id} not found in DB.")
+            return
+        
+        drive_file_id = sub_res.data["drive_file_id"]
+        team_name = sub_res.data.get("team_name", "Unknown Team")
+        file_name = sub_res.data.get("drive_file_name", "unknown.pdf")
     except Exception as e:
-        print(f"[Worker] ERROR: Could not fetch submissions from DB: {e}")
-        return
+        print(f"[Worker] ERROR: Could not fetch submission {submission_id} from DB: {e}")
+        raise self.retry(exc=e, countdown=10)
 
-    if not submissions:
-        print(f"[Worker] No pending submissions found for project_id={project_id}. Exiting.")
-        return
+    print(f"[Worker] ── Processing: '{team_name}' ({file_name})")
 
-    print(f"[Worker] Found {len(submissions)} pending submissions. Beginning fetch loop...\n")
-
-    # --- Process each submission sequentially ---
-    success_count = 0
-    fail_count = 0
-
-    for submission in submissions:
-        submission_id = submission["submission_id"]
-        drive_file_id = submission["drive_file_id"]
-        team_name = submission.get("team_name", "Unknown Team")
-        file_name = submission.get("drive_file_name", "unknown.pdf")
-
-        print(f"[Worker] ── Processing: '{team_name}' ({file_name})")
-
-        pdf_bytes = await _fetch_single_submission(
+    # Call async fetch function using asyncio.run
+    try:
+        pdf_bytes = asyncio.run(_fetch_single_submission(
             submission_id=submission_id,
             drive_file_id=drive_file_id,
             project_id=project_id,
-        )
+        ))
+    except Exception as e:
+        logger.error(f"[Worker] Failed during _fetch_single_submission for {submission_id}: {e}")
+        raise self.retry(exc=e, countdown=20)
 
-        if pdf_bytes is not None:
-            # ── Step 2: Extract with Docling ──
-            print(f"[Worker] ── Step 2/Extract: running Docling on '{team_name}'")
-            extract_ok = await extract_submission_slides(
+    if pdf_bytes is not None:
+        # ── Step 2: Extract with Docling ──
+        print(f"[Worker] ── Step 2/Extract: running extraction on '{team_name}'")
+        try:
+            extract_ok = asyncio.run(extract_submission_slides(
                 pdf_bytes=pdf_bytes,
                 submission_id=submission_id,
                 project_id=project_id,
-            )
+            ))
+        except Exception as e:
+            logger.error(f"[Worker] Failed during extract_submission_slides for {submission_id}: {e}")
+            extract_ok = False
 
-            if extract_ok:
-                # Mark extraction as complete
-                try:
-                    admin_supabase.table("submissions").update({
-                        "processing_status": "extracted",  # Status changed to extracted, not completed yet
-                        "updated_at": _now_iso()
-                    }).eq("submission_id", submission_id).execute()
-                    print(f"[Worker]    ✅ '{team_name}' → extracted. Queuing embedding task.")
-                    
-                    # Queue the embedding task
+        if extract_ok:
+            # Mark extraction as complete
+            try:
+                admin_supabase.table("submissions").update({
+                    "processing_status": "extracted",  # Status changed to extracted, not completed yet
+                    "updated_at": _now_iso()
+                }).eq("submission_id", submission_id).execute()
+                print(f"[Worker]    ✅ '{team_name}' → extracted. Queuing embedding task.")
+                
+                # Check if job exists; otherwise create one so embedding UI knows it's queued
+                job_res = admin_supabase.table("processing_jobs").select("job_id").eq("submission_id", submission_id).eq("job_type", "embed_submission_slides").execute()
+                if not job_res.data:
                     admin_supabase.table("processing_jobs").insert({
                         "job_type": "embed_submission_slides",
                         "related_id": submission_id,
@@ -108,29 +109,29 @@ async def process_submissions_background(project_id: str) -> None:
                         "project_id": project_id,
                         "status": "queued"
                     }).execute()
-                    
-                    from app.celery_app import celery_app
-                    celery_app.send_task(
-                        "app.services.embedding_service.embed_submission_slides_task",
-                        args=[submission_id],
-                        queue="embedding"
-                    )
-                except Exception as e:
-                    logger.warning(f"[Worker] Could not mark submission extracted or queue embedding: {e}")
-                success_count += 1
-            else:
-                # Extraction failed → mark submission as failed
-                try:
-                    admin_supabase.table("submissions").update({
-                        "processing_status": "failed",
-                        "updated_at": _now_iso()
-                    }).eq("submission_id", submission_id).execute()
-                    print(f"[Worker]    ❌ '{team_name}' → extraction failed")
-                except Exception as e:
-                    logger.warning(f"[Worker] Could not mark submission failed (extract): {e}")
-                fail_count += 1
+                else:
+                    admin_supabase.table("processing_jobs").update({"status": "queued"}).eq("submission_id", submission_id).eq("job_type", "embed_submission_slides").execute()
+                
+                celery_app.send_task(
+                    "app.services.embedding_service.embed_submission_slides_task",
+                    args=[submission_id],
+                    queue="embedding"
+                )
+            except Exception as e:
+                logger.warning(f"[Worker] Could not mark submission extracted or queue embedding: {e}")
         else:
-            fail_count += 1
+            # Extraction failed → mark submission as failed
+            try:
+                admin_supabase.table("submissions").update({
+                    "processing_status": "failed",
+                    "updated_at": _now_iso()
+                }).eq("submission_id", submission_id).execute()
+                print(f"[Worker]    ❌ '{team_name}' → extraction failed")
+            except Exception as e:
+                logger.warning(f"[Worker] Could not mark submission failed (extract): {e}")
+    else:
+        # fetch failed, status already handled by _fetch_single_submission
+        print(f"[Worker]    ❌ '{team_name}' → fetch failed")
 
     # --- Update project status after processing ---
     try:
@@ -141,7 +142,7 @@ async def process_submissions_background(project_id: str) -> None:
     except Exception as e:
         print(f"[Worker] WARNING: Could not update project status: {e}")
 
-    print(f"\n[Worker] ✅ Done. Success={success_count} | Failed={fail_count}")
+    print(f"\n[Worker] ✅ Done processing task for {submission_id}")
     print(f"{'='*60}\n")
 
 

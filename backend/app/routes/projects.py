@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, Header, BackgroundTasks, HTTPException
 from app.services.auth import get_current_user
 from app.services.projects import create_project_in_db
 from app.services.google_drive import list_files_in_folder, scan_and_store_submissions
-from app.services.pdf_processor import process_submissions_background
+from app.celery_app import celery_app
 from app.schemas import ProjectCreateRequest, ProjectResponse, ProcessingStartResponse
 from app.database import admin_supabase
 import re
@@ -104,7 +104,6 @@ async def start_scan(project_id: str, current_user = Depends(get_current_user)):
 @router.post("/projects/{project_id}/start-processing", response_model=ProcessingStartResponse)
 async def start_processing(
     project_id: str,
-    background_tasks: BackgroundTasks,
     current_user = Depends(get_current_user)
 ):
     """
@@ -123,15 +122,17 @@ async def start_processing(
     if not project_res.data:
         raise HTTPException(status_code=404, detail="Project not found or access denied.")
 
-    # Count pending submissions so we can report back right away
+    # Fetch pending submissions so we can report back right away and queue them
     pending_res = (
         admin_supabase.table("submissions")
-        .select("submission_id", count="exact")
+        .select("submission_id")
         .eq("project_id", project_id)
         .eq("processing_status", "pending")
         .execute()
     )
-    pending_count = pending_res.count or 0
+    
+    pending_submissions = pending_res.data or []
+    pending_count = len(pending_submissions)
 
     if pending_count == 0:
         return ProcessingStartResponse(
@@ -140,8 +141,13 @@ async def start_processing(
             queued=0
         )
 
-    # Fire off the background worker — returns immediately
-    background_tasks.add_task(process_submissions_background, project_id)
+    # Fire off individual Celery tasks for each pending submission
+    for sub in pending_submissions:
+        celery_app.send_task(
+            "app.services.pdf_processor.process_submission_task",
+            args=[sub["submission_id"], project_id],
+            queue="extraction"
+        )
 
     return ProcessingStartResponse(
         message=f"Processing started for {pending_count} submission(s).",
