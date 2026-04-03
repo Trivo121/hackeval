@@ -361,3 +361,20 @@ def _sync_insert_slides(slide_records: list[dict]) -> None:
         raise RuntimeError(
             "Supabase returned no data after insert — insert may have failed."
         )
+
+
+def _store_slides_sync(slide_records: list[dict], submission_id: str) -> bool:
+    """
+    Synchronous version for Celery tasks — calls _sync_insert_slides directly
+    without going through asyncio. Returns True on success, False on failure.
+    """
+    if not slide_records:
+        logger.warning(f"[Step2/Extract] No slide records to store for submission_id={submission_id}")
+        return False
+    try:
+        _sync_insert_slides(slide_records)
+        logger.info(f"[Step2/Extract] Stored {len(slide_records)} slides for submission_id={submission_id} ✅")
+        return True
+    except Exception as e:
+        logger.error(f"[Step2/Extract] DB insert failed for submission_id={submission_id}: {e}")
+        return False

@@ -1,7 +1,7 @@
 """
 One-time script: Reset submissions to 'pending' and trigger reprocessing.
 """
-import os, sys, asyncio
+import os, sys
 sys.path.insert(0, ".")
 os.environ["HF_HOME"] = "D:/hf_cache"
 os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from app.database import admin_supabase
-from app.services.pdf_processor import process_submissions_background
+from app.services.pdf_processor import process_submission_task  # ✅ the real Celery task
 
 PROJECT_ID = "1ccd4eb9-68af-41ec-bfdf-1b3b7abb749e"
 
@@ -43,10 +43,17 @@ def main():
     for s in res.data:
         print(f"  {s['team_name']}: {s['processing_status']}")
 
-    # 4. Trigger reprocessing
-    print("\n=== Step 2: Starting reprocessing ===")
-    asyncio.run(process_submissions_background(PROJECT_ID))
-    print("\n=== DONE ===")
+    # 4. Trigger reprocessing by firing individual Celery tasks
+    print("\n=== Step 2: Queuing reprocessing tasks ===")
+    res = admin_supabase.table("submissions") \
+        .select("submission_id, team_name") \
+        .eq("project_id", PROJECT_ID) \
+        .eq("processing_status", "pending") \
+        .execute()
+    for s in (res.data or []):
+        process_submission_task.delay(s["submission_id"], PROJECT_ID)
+        print(f"  Queued: {s['team_name']} ({s['submission_id']})")
+    print(f"\n=== DONE — {len(res.data or [])} task(s) queued ===")
 
 if __name__ == "__main__":
     main()

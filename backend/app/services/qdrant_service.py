@@ -38,11 +38,13 @@ def init_qdrant_collection():
             logger.info(f"[Qdrant] Collection '{COLLECTION_NAME}' does not exist. Creating...")
             qdrant_client.create_collection(
                 collection_name=COLLECTION_NAME,
-                vectors_config=VectorParams(
-                    size=384,             # all-MiniLM-L6-v2 dimensions
-                    distance=Distance.COSINE,
-                    on_disk=True          # Saves RAM
-                ),
+                vectors_config={
+                    "text": VectorParams(        # ✅ named vector — matches embedding_service upserts
+                        size=384,               # all-MiniLM-L6-v2 dimensions
+                        distance=Distance.COSINE,
+                        on_disk=True            # Saves RAM
+                    )
+                },
                 # Setup HNSW params
                 hnsw_config={
                     "m": 16,

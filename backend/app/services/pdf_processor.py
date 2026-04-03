@@ -15,14 +15,13 @@ Step 2: EXTRACT (Docling)
   - On failure → submission.processing_status = 'failed'
 """
 
-import asyncio
 import logging
 from datetime import datetime, timezone
 from io import BytesIO
 
 from app.database import admin_supabase
-from app.services.google_drive import stream_pdf_bytes
-from app.services.docling_extractor import extract_submission_slides
+from app.services.google_drive import stream_pdf_bytes_sync   # ✅ sync version
+from app.services.docling_extractor import _sync_extract_pdf, _store_slides_sync  # ✅ sync internals
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +37,7 @@ def process_submission_task(self, submission_id: str, project_id: str) -> None:
     """
     Main background worker entrypoint (Celery Task).
     Processes a single submission through the pipeline starting with Step 1: Fetch.
+    NOTE: Celery tasks are synchronous — we use sync versions of all I/O calls.
     """
     print(f"\n{'='*60}")
     print(f"[Worker] Starting extraction task for submission_id={submission_id}")
@@ -66,59 +66,64 @@ def process_submission_task(self, submission_id: str, project_id: str) -> None:
 
     print(f"[Worker] ── Processing: '{team_name}' ({file_name})")
 
-    # Call async fetch function using asyncio.run
+    # ✅ Step 1: Fetch — fully synchronous, no asyncio.run()
     try:
-        pdf_bytes = asyncio.run(_fetch_single_submission(
+        pdf_bytes = _fetch_single_submission_sync(
             submission_id=submission_id,
             drive_file_id=drive_file_id,
             project_id=project_id,
-        ))
+        )
     except Exception as e:
-        logger.error(f"[Worker] Failed during _fetch_single_submission for {submission_id}: {e}")
+        logger.error(f"[Worker] Failed during _fetch_single_submission_sync for {submission_id}: {e}")
         raise self.retry(exc=e, countdown=20)
 
     if pdf_bytes is not None:
-        # ── Step 2: Extract with Docling ──
+        # ── Step 2: Extract with PyMuPDF/EasyOCR ──
         print(f"[Worker] ── Step 2/Extract: running extraction on '{team_name}'")
         try:
-            extract_ok = asyncio.run(extract_submission_slides(
-                pdf_bytes=pdf_bytes,
-                submission_id=submission_id,
-                project_id=project_id,
-            ))
+            # ✅ Call the internal sync function directly — no asyncio.run() needed
+            slide_records = _sync_extract_pdf(pdf_bytes, submission_id, project_id)
+            extract_ok = _store_slides_sync(slide_records, submission_id) if slide_records else False
         except Exception as e:
-            logger.error(f"[Worker] Failed during extract_submission_slides for {submission_id}: {e}")
+            logger.error(f"[Worker] Failed during extraction for {submission_id}: {e}")
             extract_ok = False
 
         if extract_ok:
-            # Mark extraction as complete
+            # Mark extraction as complete — stay in 'processing' since embedding still needs to run
+            # (DB CHECK constraint: pending|queued|processing|completed|failed — 'extracted' is NOT allowed)
             try:
                 admin_supabase.table("submissions").update({
-                    "processing_status": "extracted",  # Status changed to extracted, not completed yet
+                    "processing_status": "processing",  # ✅ valid DB status
                     "updated_at": _now_iso()
                 }).eq("submission_id", submission_id).execute()
-                print(f"[Worker]    ✅ '{team_name}' → extracted. Queuing embedding task.")
-                
-                # Check if job exists; otherwise create one so embedding UI knows it's queued
-                job_res = admin_supabase.table("processing_jobs").select("job_id").eq("submission_id", submission_id).eq("job_type", "embed_submission_slides").execute()
+                print(f"[Worker]    ✅ '{team_name}' → slides extracted, queuing embedding task.")
+
+                # Upsert the embedding job row so the progress endpoint can track it
+                # job_type must be 'embedding' per DB CHECK constraint (not 'embed_submission_slides')
+                job_res = admin_supabase.table("processing_jobs").select("job_id") \
+                    .eq("submission_id", submission_id) \
+                    .eq("job_type", "embedding") \
+                    .execute()
                 if not job_res.data:
                     admin_supabase.table("processing_jobs").insert({
-                        "job_type": "embed_submission_slides",
-                        "related_id": submission_id,
+                        "job_type": "embedding",
                         "submission_id": submission_id,
                         "project_id": project_id,
                         "status": "queued"
                     }).execute()
                 else:
-                    admin_supabase.table("processing_jobs").update({"status": "queued"}).eq("submission_id", submission_id).eq("job_type", "embed_submission_slides").execute()
-                
+                    admin_supabase.table("processing_jobs").update({"status": "queued"}) \
+                        .eq("submission_id", submission_id) \
+                        .eq("job_type", "embedding") \
+                        .execute()
+
                 celery_app.send_task(
                     "app.services.embedding_service.embed_submission_slides_task",
                     args=[submission_id],
                     queue="embedding"
                 )
             except Exception as e:
-                logger.warning(f"[Worker] Could not mark submission extracted or queue embedding: {e}")
+                logger.warning(f"[Worker] Could not mark submission processing or queue embedding: {e}")
         else:
             # Extraction failed → mark submission as failed
             try:
@@ -130,7 +135,6 @@ def process_submission_task(self, submission_id: str, project_id: str) -> None:
             except Exception as e:
                 logger.warning(f"[Worker] Could not mark submission failed (extract): {e}")
     else:
-        # fetch failed, status already handled by _fetch_single_submission
         print(f"[Worker]    ❌ '{team_name}' → fetch failed")
 
     # --- Update project status after processing ---
@@ -147,27 +151,27 @@ def process_submission_task(self, submission_id: str, project_id: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Step 1: Fetch
+# Step 1: Fetch (SYNC — safe to call from Celery tasks)
 # ---------------------------------------------------------------------------
 
-async def _fetch_single_submission(
+def _fetch_single_submission_sync(
     submission_id: str,
     drive_file_id: str,
     project_id: str,
 ) -> BytesIO | None:
     """
-    Step 1 — Fetch:
+    Step 1 — Fetch (synchronous version for Celery workers):
       1. Find the matching pdf_extraction job in processing_jobs
       2. Mark submission processing_status = 'processing'
       3. Mark job status = 'running', set started_at
-      4. Stream PDF bytes from Google Drive → BytesIO
-      5. Mark job status = 'completed' or 'failed' + update submission on failure
-    
+      4. Download PDF bytes from Google Drive → BytesIO (sync httpx.Client)
+      5. Mark job status = 'completed' or 'failed'
+
     Returns a BytesIO (rewound to position 0) on success, or None on failure.
     """
 
     # ── 1. Look up the processing job for this submission ──
-    job_id = await _get_job_id(submission_id, project_id, job_type="pdf_extraction")
+    job_id = _get_job_id_sync(submission_id, project_id, job_type="pdf_extraction")
 
     # ── 2. Mark submission as 'processing' ──
     try:
@@ -190,12 +194,11 @@ async def _fetch_single_submission(
         except Exception as e:
             print(f"  [Step1/Fetch] WARNING: Could not update job to running: {e}")
 
-    # ── 4. Stream PDF bytes from Drive ──
-    pdf_bytes = await stream_pdf_bytes(drive_file_id)
+    # ── 4. Download PDF bytes from Drive (sync) ──
+    pdf_bytes = stream_pdf_bytes_sync(drive_file_id)
 
     # ── 5. Update DB based on result ──
     if pdf_bytes is not None:
-        # Success
         if job_id:
             try:
                 admin_supabase.table("processing_jobs").update({
@@ -206,10 +209,9 @@ async def _fetch_single_submission(
             except Exception as e:
                 print(f"  [Step1/Fetch] WARNING: Could not mark job completed: {e}")
 
-        return pdf_bytes  # Hand off to Step 2
+        return pdf_bytes
 
     else:
-        # Failure — update submission + job
         try:
             admin_supabase.table("submissions").update({
                 "processing_status": "failed",
@@ -220,7 +222,6 @@ async def _fetch_single_submission(
 
         if job_id:
             try:
-                # Check retry logic
                 job_res = admin_supabase.table("processing_jobs").select(
                     "retry_count, max_retries"
                 ).eq("job_id", job_id).single().execute()
@@ -234,7 +235,7 @@ async def _fetch_single_submission(
                     admin_supabase.table("processing_jobs").update({
                         "status": new_status,
                         "retry_count": new_retry_count,
-                        "error_message": f"Failed to stream PDF from Drive (file_id={drive_file_id})",
+                        "error_message": f"Failed to download PDF from Drive (file_id={drive_file_id})",
                         "completed_at": _now_iso() if new_status == "failed" else None
                     }).eq("job_id", job_id).execute()
 
@@ -246,14 +247,11 @@ async def _fetch_single_submission(
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Helpers (sync)
 # ---------------------------------------------------------------------------
 
-async def _get_job_id(submission_id: str, project_id: str, job_type: str) -> str | None:
-    """
-    Looks up the processing_job for a given submission + job_type.
-    Returns the job_id string or None if not found.
-    """
+def _get_job_id_sync(submission_id: str, project_id: str, job_type: str) -> str | None:
+    """Synchronous version — looks up a queued processing_job for a given submission."""
     try:
         res = (
             admin_supabase
@@ -262,7 +260,7 @@ async def _get_job_id(submission_id: str, project_id: str, job_type: str) -> str
             .eq("submission_id", submission_id)
             .eq("project_id", project_id)
             .eq("job_type", job_type)
-            .eq("status", "queued")  # Only pick up queued jobs
+            .eq("status", "queued")
             .limit(1)
             .execute()
         )

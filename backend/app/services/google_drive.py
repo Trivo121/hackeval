@@ -135,3 +135,41 @@ async def stream_pdf_bytes(file_id: str) -> BytesIO | None:
     except Exception as e:
         print(f"[Fetch] Exception while streaming file_id={file_id}: {str(e)}")
         return None
+
+
+def stream_pdf_bytes_sync(file_id: str) -> BytesIO | None:
+    """
+    Synchronous version of stream_pdf_bytes — uses httpx.Client (blocking).
+    Safe to call from Celery tasks where there is no async event loop.
+    """
+    if not GOOGLE_API_KEY:
+        print("ERROR: GOOGLE_API_KEY is not set. Cannot download PDF.")
+        return None
+
+    url = f"https://www.googleapis.com/drive/v3/files/{file_id}"
+    params = {
+        "alt": "media",
+        "key": GOOGLE_API_KEY
+    }
+
+    try:
+        import httpx as _httpx  # already a dependency
+        with _httpx.Client(timeout=120.0, follow_redirects=True) as client:
+            print(f"[Fetch/Sync] Downloading PDF bytes for file_id={file_id}")
+            response = client.get(url, params=params)
+
+            if response.status_code != 200:
+                print(f"[Fetch/Sync] Drive download failed: HTTP {response.status_code} — {response.text[:200]}")
+                return None
+
+            pdf_bytes = BytesIO(response.content)
+            pdf_bytes.seek(0)
+            print(f"[Fetch/Sync] Downloaded {len(response.content):,} bytes for file_id={file_id}")
+            return pdf_bytes
+
+    except _httpx.TimeoutException:
+        print(f"[Fetch/Sync] Timeout while downloading file_id={file_id}")
+        return None
+    except Exception as e:
+        print(f"[Fetch/Sync] Exception while downloading file_id={file_id}: {str(e)}")
+        return None

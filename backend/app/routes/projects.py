@@ -141,11 +141,37 @@ async def start_processing(
             queued=0
         )
 
-    # Fire off individual Celery tasks for each pending submission
+    # For each pending submission: create the pdf_extraction job row FIRST, then fire Celery.
+    # This ensures _get_job_id_sync() inside the worker can find the row immediately.
     for sub in pending_submissions:
+        sub_id = sub["submission_id"]
+        try:
+            # Upsert the pdf_extraction job row (Bug 3 fix: it was never created here before)
+            existing_job = admin_supabase.table("processing_jobs") \
+                .select("job_id") \
+                .eq("submission_id", sub_id) \
+                .eq("job_type", "pdf_extraction") \
+                .execute()
+            if not existing_job.data:
+                admin_supabase.table("processing_jobs").insert({
+                    "job_type": "pdf_extraction",
+                    "submission_id": sub_id,
+                    "project_id": project_id,
+                    "status": "queued"
+                }).execute()
+            else:
+                # Reset to queued if it already exists (e.g. after a reset-submissions)
+                admin_supabase.table("processing_jobs").update({"status": "queued"}) \
+                    .eq("submission_id", sub_id) \
+                    .eq("job_type", "pdf_extraction") \
+                    .execute()
+        except Exception as e:
+            # Non-fatal — worker will still run, just won't have job tracking
+            print(f"[start-processing] WARNING: Could not upsert pdf_extraction job for {sub_id}: {e}")
+
         celery_app.send_task(
             "app.services.pdf_processor.process_submission_task",
-            args=[sub["submission_id"], project_id],
+            args=[sub_id, project_id],
             queue="extraction"
         )
 
@@ -218,12 +244,13 @@ async def get_embedding_progress(project_id: str, current_user = Depends(get_cur
         # Anything past 'pending' (e.g., extracted, indexed, categorized) has been extracted
         extracted = extracted_res.count or 0
 
-        # Categorized
-        cat_res = admin_supabase.table("submissions").select("submission_id", count="exact").eq("project_id", project_id).eq("processing_status", "categorized").execute()
+        # Categorized — 'completed' is the final status after auto-categorization runs
+        # ('categorized' was the old value but is NOT in the DB CHECK constraint)
+        cat_res = admin_supabase.table("submissions").select("submission_id", count="exact").eq("project_id", project_id).eq("processing_status", "completed").execute()
         categorized = cat_res.count or 0
 
-        # Embedded (Indexed): Look up processing_jobs for this project where job_type='embed_submission_slides' and status='completed'
-        emb_res = admin_supabase.table("processing_jobs").select("job_id", count="exact").eq("project_id", project_id).eq("job_type", "embed_submission_slides").eq("status", "completed").execute()
+        # Embedded: look up processing_jobs where job_type='embedding' (not 'embed_submission_slides')
+        emb_res = admin_supabase.table("processing_jobs").select("job_id", count="exact").eq("project_id", project_id).eq("job_type", "embedding").eq("status", "completed").execute()
         embedded = emb_res.count or 0
         
         # Calculate ETA (rough estimate: 2s per remaining extraction, 2s per remaining embedding)

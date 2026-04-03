@@ -139,7 +139,7 @@ def embed_submission_slides_task(self, submission_id: str):
     
     if not slides:
         logger.info(f"[WorkflowB] No unindexed slides found for {submission_id}.")
-        _update_job_status(submission_id, "embed_submission_slides", "completed")
+        _update_job_status(submission_id, "embedding", "completed")  # ✅ valid job_type
         _check_all_indexed_and_trigger_categorize(project_id)
         return
         
@@ -148,9 +148,9 @@ def embed_submission_slides_task(self, submission_id: str):
     slide_ids = []
     
     for slide in slides:
-        extracted = slide.get("extracted_text", "")
-        ocr = slide.get("image_descriptions", "") or "" # If they actually have an image OCR column
-        score = slide.get("layout_complexity_score", 0.0)
+        extracted = slide.get("text_content", "") or ""          # ✅ matches docling_extractor.py
+        ocr = slide.get("images_ocr_text", "") or ""             # ✅ matches docling_extractor.py
+        score = slide.get("complexity_score", 0.0)               # ✅ matches docling_extractor.py
         
         combined = f"Slide {slide.get('slide_number')}\nContent:\n{extracted}\nVisuals:\n{ocr}"
         texts.append(combined)
@@ -197,12 +197,12 @@ def embed_submission_slides_task(self, submission_id: str):
                 "embedding_version": 1
             }).eq("slide_id", slide_id).execute()
         
-        _update_job_status(submission_id, "embed_submission_slides", "completed")
+        _update_job_status(submission_id, "embedding", "completed")  # ✅ valid job_type
         _check_all_indexed_and_trigger_categorize(project_id)
-        
+
     except Exception as e:
         logger.error(f"[WorkflowB] Failed embedding task for {submission_id}: {e}")
-        _update_job_status(submission_id, "embed_submission_slides", "failed", str(e))
+        _update_job_status(submission_id, "embedding", "failed", str(e))  # ✅ valid job_type
         raise self.retry(exc=e, countdown=15)
 
 
@@ -318,7 +318,7 @@ def auto_categorize_project_task(self, project_id: str):
                 admin_supabase.table("submissions").update({
                     "detected_problem_statement_id": best_ps_id,
                     "detection_confidence": round(float(best_score), 4),
-                    "processing_status": "categorized"
+                    "processing_status": "completed"  # ✅ valid status; 'categorized' not in DB CHECK
                 }).eq("submission_id", sub_id).execute()
                 
         logger.info(f"[AutoCat] Successfully categorized {len(subs_res.data)} submissions for project {project_id}.")
