@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import {
     Mail, Lock, ArrowRight, Github,
     Terminal, Loader2, AlertCircle
@@ -15,18 +15,10 @@ const GoogleIcon = () => (
 
 const LoginPage = ({ onLogin = () => { }, onNavigateBack = () => { } }) => {
     const [isLoading, setIsLoading] = useState(false);
-    const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 });
+    // Removed local mouse tracking, it is now global in App.js
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [error, setError] = useState(null);
-
-    useEffect(() => {
-        const handleMouseMove = (e) => {
-            setMousePosition({ x: e.clientX, y: e.clientY });
-        };
-        window.addEventListener('mousemove', handleMouseMove);
-        return () => window.removeEventListener('mousemove', handleMouseMove);
-    }, []);
 
     const handleSubmit = (e) => {
         e.preventDefault();
@@ -67,12 +59,7 @@ const LoginPage = ({ onLogin = () => { }, onNavigateBack = () => { } }) => {
 
     return (
         <div className="min-h-screen bg-[#050505] text-white overflow-hidden font-sans flex flex-col relative">
-            <div
-                className="fixed inset-0 pointer-events-none z-0"
-                style={{
-                    background: `radial-gradient(600px circle at ${mousePosition.x}px ${mousePosition.y}px, rgba(255,255,255,0.03), transparent 40%)`
-                }}
-            />
+
 
             <nav className="relative z-50 p-6">
                 <div
