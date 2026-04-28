@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import {
     Shield, ArrowRight, Clock, Play,
     Target, FileJson, Database,
@@ -6,11 +6,26 @@ import {
 } from 'lucide-react';
 
 const LandingPage = ({ onNavigate, onLoginClick }) => {
-    // Removed local mouse tracking, it is now global in App.js
+    const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 });
+
+    useEffect(() => {
+        const handleMouseMove = (e) => {
+            setMousePosition({ x: e.clientX, y: e.clientY });
+        };
+        window.addEventListener('mousemove', handleMouseMove);
+        return () => window.removeEventListener('mousemove', handleMouseMove);
+    }, []);
+
     return (
         <div className="min-h-screen bg-[#050505] text-white overflow-hidden font-sans selection:bg-white/20">
 
-
+            {/* Dynamic Background Spotlight - White/Silver */}
+            <div
+                className="fixed inset-0 pointer-events-none z-0 transition-opacity duration-1000"
+                style={{
+                    background: `radial-gradient(600px circle at ${mousePosition.x}px ${mousePosition.y}px, rgba(255, 255, 255, 0.03), transparent 40%)`
+                }}
+            />
 
             {/* Navigation */}
             {/* Navigation */}

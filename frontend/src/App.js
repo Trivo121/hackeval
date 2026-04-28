@@ -10,7 +10,6 @@ import { supabase } from './services/auth';
 import { syncUser } from './services/api';
 
 function App() {
-    const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 });
     const [currentPage, setCurrentPage] = useState('landing');
     const [user, setUser] = useState(null);
     const [dbUser, setDbUser] = useState(null); // To store DB profile with access_status
@@ -44,15 +43,6 @@ function App() {
             }
         };
         checkSession();
-    }, []);
-
-    // Global mouse tracking
-    useEffect(() => {
-        const handleMouseMove = (e) => {
-            setMousePosition({ x: e.clientX, y: e.clientY });
-        };
-        window.addEventListener('mousemove', handleMouseMove);
-        return () => window.removeEventListener('mousemove', handleMouseMove);
     }, []);
 
     // Listen for auth changes (sign-in, sign-out events)
@@ -91,15 +81,7 @@ function App() {
     }
 
     return (
-        <div className="App min-h-screen bg-[#050505] text-white">
-            {/* Global Dynamic Background Spotlight */}
-            <div
-                className="fixed inset-0 pointer-events-none z-50 transition-opacity duration-1000"
-                style={{
-                    background: `radial-gradient(600px circle at ${mousePosition.x}px ${mousePosition.y}px, rgba(255, 255, 255, 0.03), transparent 40%)`
-                }}
-            />
-
+        <div className="App">
             {currentPage === 'landing' && !user && (
                 <LandingPage
                     onNavigate={() => setCurrentPage('login')}
