@@ -10,8 +10,8 @@ from qdrant_client.http.models import PointStruct
 
 logger = logging.getLogger(__name__)
 
-# Module-level variable for lazy loading Sentence Transformers per worker process
-_model = None
+from sentence_transformers import SentenceTransformer
+_model = SentenceTransformer('all-MiniLM-L6-v2')
 
 def get_model():
     """
@@ -23,7 +23,7 @@ def get_model():
         logger.info("[EmbeddingService] Loading SentenceTransformers model for the first time in this worker...")
         try:
             from sentence_transformers import SentenceTransformer
-            _model = SentenceTransformer('all-MiniLM-L6-v2', device="cpu")
+            _model = SentenceTransformer('all-MiniLM-L6-v2')
             logger.info("[EmbeddingService] Model loaded successfully.")
         except ImportError:
             logger.error("sentence-transformers not installed.")
@@ -175,7 +175,7 @@ def embed_submission_slides_task(self, submission_id: str):
                         "submission_id": submission_id,
                         "slide_number": slide.get("slide_number"),
                         "team_name": team_name,
-                        "complexity_score": slide.get("layout_complexity_score", 0),
+                        "complexity_score": slide.get("complexity_score", 0),
                         "indexed_at": _now_iso()
                     }
                 )
@@ -224,21 +224,34 @@ def _update_job_status(submission_id: str, job_type: str, status: str, error: st
 # ---------------------------------------------------------------------------
 
 def _check_all_indexed_and_trigger_categorize(project_id: str):
-    """Checks if ALL submissions are indexed. If so, trigger categorization task chain."""
-    subs = admin_supabase.table("submissions").select("submission_id, processing_status").eq("project_id", project_id).execute()
+    subs = admin_supabase.table("submissions") \
+        .select("submission_id, processing_status") \
+        .eq("project_id", project_id) \
+        .execute()
     submissions = subs.data or []
-    
-    # Are there any missing extracted statuses? Wait, Docling sets it to 'completed' or 'extracted'
+
+    if not submissions:
+        return  # nothing to do
+
     all_indexed = True
+
     for s in submissions:
-        # Check if any slides are unindexed
-        unindexed = admin_supabase.table("submission_slides").select("slide_id", count="exact") \
-            .eq("submission_id", s["submission_id"]) \
-            .eq("qdrant_indexed", False).execute()
-        
-        if unindexed.count and unindexed.count > 0:
-            all_indexed = False
-            break
+        sub_id = s["submission_id"]
+
+        # ── Gate 1: skip submissions that failed — they will never have slides ──
+        if s.get("processing_status") == "failed":
+            continue
+
+        # ── Gate 2: the submission must have AT LEAST one slide ──
+        total_slides = admin_supabase.table("submission_slides") \
+            .select("slide_id", count="exact") \
+            .eq("submission_id", sub_id) \
+            .execute()
+
+        if not total_slides.count or total_slides.count == 0:
+            # Extraction hasn't produced any slides yet — not ready
+            all_indexed = False # <--- ADDED THIS
+            break               # <--- ADDED THIS to stop the loop early
             
     if all_indexed and len(submissions) > 0:
         logger.info(f"[AutoCat] All submissions indexed for project {project_id}. Triggering Auto-Categorization.")
@@ -271,14 +284,27 @@ def auto_categorize_project_task(self, project_id: str):
             limit=100
         )[0]
         
-        if not ps_results:
-            logger.warning("[AutoCat] No problem statement embeddings found.")
-            return
-            
         # 2. Match each submission
         subs_res = admin_supabase.table("submissions").select("submission_id").eq("project_id", project_id).execute()
+        submissions = subs_res.data or []
+
+        if not ps_results:
+            logger.warning(f"[AutoCat] No problem statement embeddings found for project {project_id}. "
+                         f"Marking {len(submissions)} submissions as completed without categorization.")
+            for sub in submissions:
+                admin_supabase.table("submissions").update({
+                    "detected_problem_statement_id": None,
+                    "detection_confidence": None,
+                    "processing_status": "processing" # Changed from completed to processing to continue to evaluation
+                }).eq("submission_id", sub["submission_id"]).execute()
+                
+                # Trigger evaluation
+                _trigger_evaluation_task(sub["submission_id"], project_id)
+            return
+            
+        logger.info(f"[AutoCat] Found {len(ps_results)} problem statements. Categorizing {len(submissions)} submissions.")
         
-        for sub in (subs_res.data or []):
+        for sub in submissions:
             sub_id = sub["submission_id"]
             
             # Fetch Slide embeddings
@@ -295,6 +321,9 @@ def auto_categorize_project_task(self, project_id: str):
             )[0]
             
             if not slide_results:
+                logger.warning(f"[AutoCat] No slides found for submission {sub_id}. Skipping categorization.")
+                # We still trigger evaluation even if categorization fails
+                _trigger_evaluation_task(sub_id, project_id)
                 continue
                 
             # Average vectors
@@ -313,17 +342,65 @@ def auto_categorize_project_task(self, project_id: str):
                     best_score = cos_sim
                     best_ps_id = ps_pt.payload.get("statement_id")
             
-            # Update submission
-            if best_ps_id:
-                admin_supabase.table("submissions").update({
-                    "detected_problem_statement_id": best_ps_id,
-                    "detection_confidence": round(float(best_score), 4),
-                    "processing_status": "completed"  # ✅ valid status; 'categorized' not in DB CHECK
-                }).eq("submission_id", sub_id).execute()
+            # Apply threshold for Open Innovation vs Specific Problem Statement
+            SIMILARITY_THRESHOLD = 0.35  # Adjust as needed based on empirical data
+            
+            # Keep processing_status = processing
+            payload = {"processing_status": "processing"}
+            if best_ps_id and best_score >= SIMILARITY_THRESHOLD:
+                payload["detected_problem_statement_id"] = best_ps_id
+                payload["detection_confidence"] = round(float(best_score), 4)
+            else:
+                # Treat as open innovation / theme-based (no strong match)
+                payload["detected_problem_statement_id"] = None
+                if best_score > -1.0:
+                    payload["detection_confidence"] = round(float(best_score), 4)
+
+            admin_supabase.table("submissions").update(payload).eq("submission_id", sub_id).execute()
+            
+            # Trigger Evaluation
+            _trigger_evaluation_task(sub_id, project_id)
                 
-        logger.info(f"[AutoCat] Successfully categorized {len(subs_res.data)} submissions for project {project_id}.")
+        logger.info(f"[AutoCat] Successfully categorized {len(submissions)} submissions for project {project_id}.")
         
     except Exception as e:
         logger.error(f"[AutoCat] Error categorizing project {project_id}: {e}")
+        # FALLBACK: Enqueue evaluations anyway
+        try:
+            subs_fallback = admin_supabase.table("submissions").select("submission_id").eq("project_id", project_id).execute()
+            for sub in (subs_fallback.data or []):
+                _trigger_evaluation_task(sub["submission_id"], project_id)
+            logger.info(f"[AutoCat] Fallback: Triggered evaluations despite categorization error.")
+        except Exception as fallback_error:
+            logger.error(f"[AutoCat] Fallback also failed: {fallback_error}")
+            
         raise self.retry(exc=e, countdown=15)
+
+def _trigger_evaluation_task(submission_id: str, project_id: str):
+    """Inserts a processing job for evaluation and sends task."""
+    try:
+        # Check if evaluation job already exists
+        job_res = admin_supabase.table("processing_jobs") \
+            .select("job_id").eq("submission_id", submission_id) \
+            .eq("job_type", "evaluation").execute()
+            
+        if not job_res.data:
+            admin_supabase.table("processing_jobs").insert({
+                "job_type": "evaluation",
+                "submission_id": submission_id,
+                "project_id": project_id,
+                "status": "queued"
+            }).execute()
+        else:
+            admin_supabase.table("processing_jobs").update({"status": "queued"}) \
+                .eq("submission_id", submission_id) \
+                .eq("job_type", "evaluation").execute()
+                
+        celery_app.send_task(
+            "app.services.evaluation_service.evaluate_submission_task",
+            args=[submission_id],
+            queue="evaluation"
+        )
+    except Exception as e:
+        logger.error(f"Failed to queue evaluation task for {submission_id}: {e}")
 

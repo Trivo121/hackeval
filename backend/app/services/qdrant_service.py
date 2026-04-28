@@ -25,38 +25,54 @@ COLLECTION_NAME = "slide_intelligence"
 
 
 def init_qdrant_collection():
-    """
-    Called on FastAPI application startup to ensure the Qdrant
-    collection is created and correctly configured.
-    """
     if qdrant_client is None:
         logger.warning("[Qdrant] Client is not initialized. Skipping collection init.")
         return
 
     try:
-        if not qdrant_client.collection_exists(COLLECTION_NAME):
-            logger.info(f"[Qdrant] Collection '{COLLECTION_NAME}' does not exist. Creating...")
+        needs_create = True
+
+        if qdrant_client.collection_exists(COLLECTION_NAME):
+            info = qdrant_client.get_collection(COLLECTION_NAME)
+            vectors_cfg = info.config.params.vectors
+
+            if isinstance(vectors_cfg, dict) and "text" in vectors_cfg:
+                logger.info(f"[Qdrant] Collection '{COLLECTION_NAME}' exists with correct schema.")
+                needs_create = False
+            else:
+                logger.warning("[Qdrant] Wrong vector schema. Deleting and recreating...")
+                qdrant_client.delete_collection(COLLECTION_NAME)
+
+        if needs_create:
+            logger.info(f"[Qdrant] Creating collection '{COLLECTION_NAME}'...")
             qdrant_client.create_collection(
                 collection_name=COLLECTION_NAME,
                 vectors_config={
-                    "text": VectorParams(        # ✅ named vector — matches embedding_service upserts
-                        size=384,               # all-MiniLM-L6-v2 dimensions
+                    "text": VectorParams(
+                        size=384,
                         distance=Distance.COSINE,
-                        on_disk=True            # Saves RAM
+                        on_disk=True
                     )
-                },
-                # Setup HNSW params
-                hnsw_config={
-                    "m": 16,
-                    "ef_construct": 100
                 }
             )
             logger.info(f"[Qdrant] Collection '{COLLECTION_NAME}' created successfully.")
-        else:
-            logger.info(f"[Qdrant] Collection '{COLLECTION_NAME}' already exists. Ready.")
+
+        # ✅ CREATE PAYLOAD INDEXES — required by Qdrant Cloud for filtered scroll/search
+        from qdrant_client.http.models import PayloadSchemaType
+        indexes_to_create = ["granularity", "project_id", "submission_id", "statement_id"]
+        for field in indexes_to_create:
+            try:
+                qdrant_client.create_payload_index(
+                    collection_name=COLLECTION_NAME,
+                    field_name=field,
+                    field_schema=PayloadSchemaType.KEYWORD,
+                )
+                logger.info(f"[Qdrant] Payload index created for '{field}'")
+            except Exception as idx_e:
+                # Index already exists — safe to ignore
+                logger.debug(f"[Qdrant] Index for '{field}' skipped: {idx_e}")
 
     except UnexpectedResponse as e:
         logger.error(f"[Qdrant] Error communicating with Qdrant server: {e}")
     except Exception as e:
         logger.error(f"[Qdrant] Unexpected error during collection init: {e}")
-

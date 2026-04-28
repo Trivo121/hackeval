@@ -1,7 +1,9 @@
-
 from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime
+
+class ParseRubricRequest(BaseModel):
+    raw_text: str
 
 class UserBase(BaseModel):
     email: str

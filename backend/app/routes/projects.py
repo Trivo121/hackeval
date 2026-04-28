@@ -3,9 +3,11 @@ from app.services.auth import get_current_user
 from app.services.projects import create_project_in_db
 from app.services.google_drive import list_files_in_folder, scan_and_store_submissions
 from app.celery_app import celery_app
-from app.schemas import ProjectCreateRequest, ProjectResponse, ProcessingStartResponse
+from app.schemas import ProjectCreateRequest, ProjectResponse, ProcessingStartResponse, ParseRubricRequest
 from app.database import admin_supabase
 import re
+import httpx
+import os
 
 router = APIRouter()
 
@@ -65,6 +67,58 @@ async def create_project(project: ProjectCreateRequest, current_user = Depends(g
 async def scan_folder(folder_id: str, current_user = Depends(get_current_user)):
     pdfs = await list_files_in_folder(folder_id)
     return {"total_files": len(pdfs), "files": pdfs}
+
+
+@router.post("/projects/parse-rubric")
+async def parse_rubric(req: ParseRubricRequest, current_user = Depends(get_current_user)):
+    """
+    Parses a raw text rubric into JSON scoring criteria using Groq's Llama 3.1 8B Instant.
+    """
+    groq_api_key = os.getenv("GROQ_API")
+    if not groq_api_key:
+        raise HTTPException(status_code=500, detail="GROQ_API key not configured.")
+    
+    prompt = f"""Parse the following hackathon rubric or evaluation description into a JSON array of scoring criteria.
+
+Each criterion must have:
+- "name": short label (max 4 words)
+- "description": full description of what this criterion measures (copy verbatim from source where possible, minimum 80 characters)
+- "weight": integer percentage (weights must sum to exactly 100; if not stated, distribute evenly)
+
+Rules:
+- Return ONLY a valid JSON array, no markdown, no preamble, no explanation
+- Never include a "Total" or summary row as a criterion
+- Minimum 2 criteria, maximum 7 criteria
+
+Rubric text:
+{req.raw_text}"""
+
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {groq_api_key.strip()}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": "llama-3.1-8b-instant",
+                    "messages": [
+                        {"role": "user", "content": prompt}
+                    ],
+                    "temperature": 0.1
+                },
+                timeout=30.0
+            )
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Request to Groq failed: {str(e)}")
+
+    if response.status_code != 200:
+        raise HTTPException(status_code=response.status_code, detail=f"Groq API error: {response.text}")
+
+    data = response.json()
+    content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+    return {"content": content}
 
 
 @router.post("/projects/{project_id}/start-scan")
@@ -184,7 +238,11 @@ async def start_processing(
 
 @router.post("/projects/{project_id}/reset-submissions")
 async def reset_submissions(project_id: str, current_user = Depends(get_current_user)):
-    """Reset all submissions to 'pending' so they can be re-extracted."""
+    """
+    Reset all submissions to 'pending', wipe old slides + processing_jobs,
+    then immediately queue fresh extraction tasks — all in one call.
+    (Bug 1 fix: previously only reset status, never queued any tasks.)
+    """
     project_res = (
         admin_supabase.table("projects")
         .select("project_id")
@@ -196,24 +254,60 @@ async def reset_submissions(project_id: str, current_user = Depends(get_current_
     if not project_res.data:
         raise HTTPException(status_code=404, detail="Project not found or access denied.")
 
-    admin_supabase.table("submissions") \
-        .update({"processing_status": "pending"}) \
-        .eq("project_id", project_id) \
-        .execute()
-
-    # Delete old slides so they get re-extracted cleanly
+    # 1. Fetch all submission IDs for this project
     sub_ids_res = admin_supabase.table("submissions") \
         .select("submission_id") \
         .eq("project_id", project_id) \
         .execute()
     sub_ids = [s["submission_id"] for s in (sub_ids_res.data or [])]
-    if sub_ids:
-        admin_supabase.table("submission_slides") \
-            .delete() \
-            .in_("submission_id", sub_ids) \
-            .execute()
 
-    return {"message": "All submissions reset to pending.", "project_id": project_id}
+    if not sub_ids:
+        return {"message": "No submissions found.", "project_id": project_id, "queued": 0}
+
+    # 2. Delete old slides
+    admin_supabase.table("submission_slides") \
+        .delete() \
+        .in_("submission_id", sub_ids) \
+        .execute()
+
+    # 3. Delete stale processing_jobs so progress tracking starts fresh
+    admin_supabase.table("processing_jobs") \
+        .delete() \
+        .in_("submission_id", sub_ids) \
+        .execute()
+
+    # 4. Reset all submissions to 'pending'
+    admin_supabase.table("submissions") \
+        .update({"processing_status": "pending"}) \
+        .eq("project_id", project_id) \
+        .execute()
+
+    # 5. Create pdf_extraction job rows + queue Celery tasks
+    #    (Same logic as start-processing — Bug 1: this was completely missing before)
+    queued = 0
+    for sub_id in sub_ids:
+        try:
+            admin_supabase.table("processing_jobs").insert({
+                "job_type": "pdf_extraction",
+                "submission_id": sub_id,
+                "project_id": project_id,
+                "status": "queued"
+            }).execute()
+        except Exception as e:
+            print(f"[reset-submissions] WARNING: Could not create pdf_extraction job for {sub_id}: {e}")
+
+        celery_app.send_task(
+            "app.services.pdf_processor.process_submission_task",
+            args=[sub_id, project_id],
+            queue="extraction"
+        )
+        queued += 1
+
+    return {
+        "message": f"Reset complete. {queued} submission(s) queued for re-processing.",
+        "project_id": project_id,
+        "queued": queued
+    }
 
 
 @router.get("/submissions/{submission_id}/slides")
@@ -267,4 +361,28 @@ async def get_embedding_progress(project_id: str, current_user = Depends(get_cur
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+@router.post("/projects/{project_id}/recover-stuck")
+async def recover_stuck(project_id: str, current_user = Depends(get_current_user)):
+    """Re-queue any submission stuck in 'processing' for more than 30 minutes."""
+    from datetime import datetime, timezone, timedelta
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
 
+    stuck = admin_supabase.table("submissions") \
+        .select("submission_id") \
+        .eq("project_id", project_id) \
+        .eq("processing_status", "processing") \
+        .lt("updated_at", cutoff) \
+        .execute()
+
+    requeued = 0
+    for sub in (stuck.data or []):
+        admin_supabase.table("submissions").update({
+            "processing_status": "pending", "updated_at": datetime.now(timezone.utc).isoformat()
+        }).eq("submission_id", sub["submission_id"]).execute()
+        celery_app.send_task(
+            "app.services.pdf_processor.process_submission_task",
+            args=[sub["submission_id"], project_id], queue="extraction"
+        )
+        requeued += 1
+
+    return {"requeued": requeued, "project_id": project_id}

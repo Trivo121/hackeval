@@ -158,3 +158,24 @@ export const reEvaluate = async (token, projectId) => {
     });
     return await startProcessing(token, projectId);
 };
+
+export const parseRubric = async (token, rawText) => {
+    try {
+        const response = await fetch(`${API_URL}/projects/parse-rubric`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ raw_text: rawText })
+        });
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Failed to parse rubric');
+        }
+        return await response.json();
+    } catch (error) {
+        console.error("Parse Rubric Error:", error);
+        throw error;
+    }
+};

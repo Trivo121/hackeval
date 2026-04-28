@@ -16,9 +16,10 @@ celery_app.conf.update(
     task_routes={
         "app.services.pdf_processor.process_submission_task": {"queue": "extraction"},
         "app.services.embedding_service.embed_submission_slides_task": {"queue": "embedding"},
-        "app.services.embedding_service.auto_categorize_project_task": {"queue": "embedding"}
+        "app.services.embedding_service.auto_categorize_project_task": {"queue": "embedding"},
+        "app.services.evaluation_service.evaluate_submission_task": {"queue": "evaluation"}
     }
 )
 
 # Optional: Autodiscover tasks so workers don't need manual imports
-celery_app.autodiscover_tasks(["app.services.embedding_service", "app.services.pdf_processor"])
+celery_app.autodiscover_tasks(["app.services.embedding_service", "app.services.pdf_processor", "app.services.evaluation_service"])

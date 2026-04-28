@@ -10,3 +10,8 @@ qdrant-client
 sentence-transformers
 celery
 redis
+numpy
+billiard
+pymupdf
+easyocr
+Pillow
