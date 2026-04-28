@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
     ArrowLeft, RefreshCw, Trophy, Medal, Search,
     ChevronUp, ChevronDown, ChevronsUpDown, Download,
-    Star, Layers, TrendingUp, Users, Loader2,
+    Star, Layers, TrendingUp, Users,
     Crown, Award, ExternalLink, BarChart2, Minus
 } from 'lucide-react';
 import { supabase } from '../services/auth';
