@@ -43,7 +43,7 @@ const LandingPage = ({ onNavigate, onLoginClick }) => {
                             onClick={onLoginClick}
                             className="px-5 py-2 bg-white text-black rounded-full text-sm font-semibold hover:bg-gray-200 transition-colors"
                         >
-                            Get Started
+                            Request Access
                         </button>
                     </div>
                 </div>
@@ -74,7 +74,7 @@ const LandingPage = ({ onNavigate, onLoginClick }) => {
                             className="px-8 py-4 bg-white text-black rounded-full font-bold hover:bg-gray-200 transition-all flex items-center space-x-2 shadow-[0_0_20px_-5px_rgba(255,255,255,0.3)]"
                         >
                             <Database className="w-4 h-4" />
-                            <span>Connect Google Drive</span>
+                            <span>Request Access with Google</span>
                         </button>
                         <button className="px-8 py-4 bg-black border border-white/20 text-white rounded-full font-medium hover:bg-white/5 transition-all flex items-center space-x-2 backdrop-blur-sm group">
                             <Play className="w-4 h-4 fill-current group-hover:scale-110 transition-transform" />
@@ -270,7 +270,7 @@ const LandingPage = ({ onNavigate, onLoginClick }) => {
                         onClick={onNavigate}
                         className="px-10 py-5 bg-white text-black text-lg font-bold rounded-full hover:bg-gray-200 hover:scale-105 transition-all shadow-[0_0_40px_-10px_rgba(255,255,255,0.3)]"
                     >
-                        Create Your First Project — It's Free
+                        Request Access Now
                     </button>
                     <p className="mt-8 text-sm text-gray-600">
                         © 2025 EvalAI. Built for high-integrity competitions.

@@ -9,6 +9,7 @@ class UserBase(BaseModel):
     email: str
     full_name: Optional[str] = None
     avatar_url: Optional[str] = None
+    access_status: str = "pending"
 
 class UserCreate(UserBase):
     user_id: str

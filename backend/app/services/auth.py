@@ -53,6 +53,13 @@ def sync_user_to_db(user):
             "google_sub": google_sub
         }
 
+        # Check if user already exists to preserve access_status
+        existing = admin_supabase.table("users").select("*").eq("user_id", user_id).execute()
+        if existing.data:
+            user_data["access_status"] = existing.data[0].get("access_status", "pending")
+        else:
+            user_data["access_status"] = "pending"
+
         # Upsert (Insert or Update)
         # on_conflict="user_id" tells Supabase which column to check for duplicates
         response = admin_supabase.table("users").upsert(

@@ -5,12 +5,14 @@ import CreateProjectPage from './pages/CreateProject';
 import ProjectDetail from './pages/ProjectDetail';
 import ProcessingPage from './pages/Processing';
 import LoginPage from './pages/Login';
+import PendingAccess from './pages/PendingAccess';
 import { supabase } from './services/auth';
 import { syncUser } from './services/api';
 
 function App() {
     const [currentPage, setCurrentPage] = useState('landing');
     const [user, setUser] = useState(null);
+    const [dbUser, setDbUser] = useState(null); // To store DB profile with access_status
     const [selectedProjectId, setSelectedProjectId] = useState(null);
     const [authReady, setAuthReady] = useState(false); // ← blocks render until session checked
 
@@ -20,13 +22,19 @@ function App() {
             try {
                 const { data: { session } } = await supabase.auth.getSession();
                 if (session) {
-                    // Set user immediately — don't wait for backend sync
                     setUser(session.user);
-                    setCurrentPage('home');
-                    // Sync backend in background (non-blocking)
-                    syncUser(session.access_token).catch(e =>
-                        console.error("Background sync failed:", e)
-                    );
+                    try {
+                        const synced = await syncUser(session.access_token);
+                        setDbUser(synced);
+                        if (synced?.access_status === 'pending') {
+                            setCurrentPage('pending');
+                        } else {
+                            setCurrentPage('home');
+                        }
+                    } catch (e) {
+                        console.error("Background sync failed:", e);
+                        setCurrentPage('home'); // fallback
+                    }
                 }
             } catch (e) {
                 console.error("Session check error:", e);
@@ -42,12 +50,21 @@ function App() {
         const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
             if (event === 'SIGNED_IN' && session) {
                 setUser(session.user);
-                setCurrentPage('home');
-                syncUser(session.access_token).catch(e =>
-                    console.error("Sync failed:", e)
-                );
+                try {
+                    const synced = await syncUser(session.access_token);
+                    setDbUser(synced);
+                    if (synced?.access_status === 'pending') {
+                        setCurrentPage('pending');
+                    } else {
+                        setCurrentPage('home');
+                    }
+                } catch (e) {
+                    console.error("Sync failed:", e);
+                    setCurrentPage('home'); // fallback
+                }
             } else if (event === 'SIGNED_OUT') {
                 setUser(null);
+                setDbUser(null);
                 setCurrentPage('landing');
             }
         });
@@ -72,7 +89,14 @@ function App() {
                 />
             )}
 
-            {currentPage === 'home' && user && (
+            {currentPage === 'pending' && user && (
+                <PendingAccess 
+                    user={user} 
+                    onSignOut={() => supabase.auth.signOut()} 
+                />
+            )}
+
+            {currentPage === 'home' && user && dbUser?.access_status !== 'pending' && (
                 <Homepage
                     user={user}
                     onCreateProject={() => setCurrentPage('create-project')}
