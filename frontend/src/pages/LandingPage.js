@@ -1,8 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
-    Zap, Shield, BarChart3, ArrowRight, CheckCircle,
-    Sparkles, Brain, Clock, Users, Play, ChevronRight,
-    Target, FileJson, Lock, Search, AlertTriangle, Database,
+    Shield, ArrowRight, Clock, Play,
+    Target, FileJson, Database,
     Scale, Split, MessageSquare, Fingerprint
 } from 'lucide-react';
 

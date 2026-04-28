@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../services/auth';
 import { getProjects } from '../services/api';
-import { Plus, Folder, Clock, ChevronRight, LogOut, Search, Filter, LayoutGrid, List } from 'lucide-react';
+import { Plus, Folder, Clock, ChevronRight, LogOut, Search, LayoutGrid, List } from 'lucide-react';
 import ProfileModal from '../components/ProfileModal';
 
 const Homepage = ({ user: initialUser, onCreateProject, onSignOut, onOpenProject }) => {

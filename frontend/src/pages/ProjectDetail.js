@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
     ArrowLeft, RefreshCw, FileText, CheckCircle2, XCircle,
-    Clock, Loader2, ChevronRight, Database, Layers,
+    Loader2, ChevronRight, Database, Layers,
     HardDrive, ExternalLink, RotateCcw, Activity, FolderOpen
 } from 'lucide-react';
 import { supabase } from '../services/auth';

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
     Activity, Terminal, Database, FileText, AlertTriangle,
-    Pause, Square, Cpu, Check, Lock, Loader2, ScanLine, BrainCircuit, Play
+    Pause, Square, Cpu, Check, Loader2, ScanLine, BrainCircuit, Play
 } from 'lucide-react';
 
 // --- SUB-COMPONENT: Processing Orbit (The Visual Tracker) ---
@@ -183,7 +183,7 @@ const ProcessingPage = ({ onComplete }) => {
         }, 100); // Speed of update
 
         return () => clearInterval(timer);
-    }, [isPaused, stage]);
+    }, [isPaused, stage, onComplete]);
 
     // Helper: Generate fake logs
     const addRandomLog = (currentProg) => {

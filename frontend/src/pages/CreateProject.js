@@ -1,9 +1,9 @@
-import React, { useState, useRef } from 'react';
+import React, { useState } from 'react';
 import {
     ArrowRight, ArrowLeft, CheckCircle, Plus, Trash2,
     Layout, Target, HardDrive, FileText, PieChart,
-    AlertCircle, X, Play, Loader2, ChevronDown, ChevronUp,
-    Clipboard, Sparkles, MoveUp, MoveDown, Eye, RotateCcw,
+    AlertCircle, Play, Loader2, ChevronDown, ChevronUp,
+    Sparkles, MoveUp, MoveDown, Eye, RotateCcw,
     Wand2, FileSearch
 } from 'lucide-react';
 import { supabase } from '../services/auth';
