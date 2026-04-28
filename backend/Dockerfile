@@ -18,6 +18,9 @@ RUN apt-get update && apt-get install -y \
 # Copy requirements file first to leverage Docker layer caching
 COPY requirements.txt .
 
+# Install CPU-only PyTorch to prevent pulling massive CUDA GPU binaries on an ARM CPU instance
+RUN pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu
+
 # Install Python dependencies
 # We use --no-cache-dir to keep the image size small
 RUN pip install --no-cache-dir -r requirements.txt
