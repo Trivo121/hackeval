@@ -4,6 +4,7 @@ import {
     Loader2, ChevronRight, Database, Layers,
     HardDrive, ExternalLink, RotateCcw, Activity, FolderOpen
 } from 'lucide-react';
+import Logo from '../components/Logo';
 import { supabase } from '../services/auth';
 import { getProjectDetails, reEvaluate } from '../services/api';
 
@@ -128,7 +129,7 @@ const ProjectDetail = ({ projectId, onBack, onReEvaluate }) => {
                         </button>
                         <span className="text-white/20">/</span>
                         <div className="flex items-center gap-2">
-                            <div className="w-6 h-6 bg-white text-black font-bold rounded-md flex items-center justify-center text-xs">H</div>
+                            <Logo className="w-6 h-6" />
                             <span className="font-semibold text-sm truncate max-w-[200px]">
                                 {project?.project_name || '…'}
                             </span>

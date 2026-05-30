@@ -4,6 +4,7 @@ import {
     Target, FileJson, Database,
     Scale, Split, MessageSquare, Fingerprint
 } from 'lucide-react';
+import Logo from '../components/Logo';
 
 const LandingPage = ({ onNavigate, onLoginClick }) => {
     const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 });
@@ -32,9 +33,7 @@ const LandingPage = ({ onNavigate, onLoginClick }) => {
             <nav className="fixed top-0 w-full z-50 bg-[#050505]/80 backdrop-blur-md border-b border-white/5">
                 <div className="w-full px-8 py-4 flex justify-between items-center">
                     <div className="flex items-center space-x-2">
-                        <div className="w-8 h-8 bg-white/10 border border-white/10 rounded-lg flex items-center justify-center">
-                            <span className="text-white font-bold text-xl">H</span>
-                        </div>
+                        <Logo className="w-8 h-8" />
                         <span className="text-xl font-bold tracking-tight">HackEval</span>
                     </div>
                     <div className="hidden md:flex items-center space-x-1">

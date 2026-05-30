@@ -3,6 +3,7 @@ import {
     Mail, Lock, ArrowRight, Github,
     Terminal, Loader2, AlertCircle
 } from 'lucide-react';
+import Logo from '../components/Logo';
 
 const GoogleIcon = () => (
     <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -79,9 +80,7 @@ const LoginPage = ({ onLogin = () => { }, onNavigateBack = () => { } }) => {
                     onClick={onNavigateBack}
                     className="cursor-pointer flex items-center space-x-2 w-fit opacity-80 hover:opacity-100 transition-opacity"
                 >
-                    <div className="w-8 h-8 bg-white/10 border border-white/10 rounded-lg flex items-center justify-center">
-                        <span className="text-white font-bold text-xl">H</span>
-                    </div>
+                    <Logo className="w-8 h-8" />
                     <span className="text-xl font-bold">HackEval</span>
                 </div>
             </nav>

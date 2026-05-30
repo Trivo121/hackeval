@@ -3,6 +3,7 @@ import { supabase } from '../services/auth';
 import { getProjects } from '../services/api';
 import { Plus, Folder, Clock, ChevronRight, LogOut, Search, LayoutGrid, List } from 'lucide-react';
 import ProfileModal from '../components/ProfileModal';
+import Logo from '../components/Logo';
 
 const Homepage = ({ user: initialUser, onCreateProject, onSignOut, onOpenProject }) => {
     const [user, setUser] = useState(initialUser);
@@ -65,9 +66,7 @@ const Homepage = ({ user: initialUser, onCreateProject, onSignOut, onOpenProject
             <nav className="fixed top-0 w-full z-40 border-b border-white/5 bg-[#050505]/80 backdrop-blur-xl">
                 <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
                     <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 bg-white text-black font-bold rounded-lg flex items-center justify-center shadow-[0_0_15px_-3px_rgba(255,255,255,0.3)]">
-                            <span className="text-xl">H</span>
-                        </div>
+                        <Logo className="w-8 h-8" />
                         <span className="font-bold text-lg tracking-tight">HackEval</span>
                     </div>
 
