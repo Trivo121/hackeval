@@ -8,7 +8,6 @@ from app.database import admin_supabase
 import re
 import httpx
 import os
-
 router = APIRouter()
 
 @router.get("/projects")
