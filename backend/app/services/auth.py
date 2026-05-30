@@ -2,6 +2,7 @@
 from fastapi import HTTPException, status, Header
 from typing import Optional
 from app.database import admin_supabase
+from supabase import Client
 
 async def get_current_user(authorization: str = Header(...)):
     """
@@ -23,7 +24,7 @@ async def get_current_user(authorization: str = Header(...)):
     except Exception as e:
         raise HTTPException(status_code=401, detail=str(e))
 
-def sync_user_to_db(user):
+def sync_user_to_db(user, db_client: Client):
     """
     Syncs the authenticated Supabase user to our public.users table.
     """
@@ -54,7 +55,7 @@ def sync_user_to_db(user):
         }
 
         # Check if user already exists to preserve access_status
-        existing = admin_supabase.table("users").select("*").eq("user_id", user_id).execute()
+        existing = db_client.table("users").select("*").eq("user_id", user_id).execute()
         if existing.data:
             user_data["access_status"] = existing.data[0].get("access_status", "pending")
         else:
@@ -62,7 +63,7 @@ def sync_user_to_db(user):
 
         # Upsert (Insert or Update)
         # on_conflict="user_id" tells Supabase which column to check for duplicates
-        response = admin_supabase.table("users").upsert(
+        response = db_client.table("users").upsert(
             user_data, on_conflict="user_id"
         ).execute()
         return response.data[0] if response.data else user_data
@@ -71,14 +72,14 @@ def sync_user_to_db(user):
         print(f"Sync Error: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to sync user to database")
 
-def update_user_profile(user_id: str, updates) -> dict:
+def update_user_profile(user_id: str, updates, db_client: Client) -> dict:
     try:
         data = updates.model_dump(exclude_unset=True)
         if not data:
             return None
             
         print(f"Updating user {user_id} with data: {data}")
-        response = admin_supabase.table("users").update(data).eq("user_id", user_id).execute()
+        response = db_client.table("users").update(data).eq("user_id", user_id).execute()
         return response.data[0] if response.data else None
     except Exception as e:
         print(f"Error updating profile: {e}")

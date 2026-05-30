@@ -1,20 +1,19 @@
-
 from fastapi import HTTPException
-from app.database import admin_supabase
+from supabase import Client
 from app.schemas import ProjectCreateRequest
 import re
 
-async def create_project_in_db(user, project_data: ProjectCreateRequest):
+async def create_project_in_db(user, project_data: ProjectCreateRequest, db_client: Client):
     """
     Orchestrates the creation of a project, including validation and DB insertion.
+    Using the dynamic user-scoped db_client ensures RLS policies are strictly honored.
     """
     user_id = user.id
 
     # 1. VALIDATION LAYER
     
-    # Check 1: Project Name Uniqueness for this user
-    # Note: 'eq' on 'project_name' might need exact match. 
-    existing_projects = admin_supabase.table("projects").select("project_id").eq("owner_user_id", user_id).eq("project_name", project_data.project_name).execute()
+    # Check 1: Project Name Uniqueness for this user (Checked securely using user's db_client)
+    existing_projects = db_client.table("projects").select("project_id").eq("owner_user_id", user_id).eq("project_name", project_data.project_name).execute()
     if existing_projects.data:
          raise HTTPException(status_code=400, detail=f"A project with the name '{project_data.project_name}' already exists.")
 
@@ -44,12 +43,9 @@ async def create_project_in_db(user, project_data: ProjectCreateRequest):
             "submission_deadline": project_data.submission_deadline.isoformat() if project_data.submission_deadline else None,
             "auto_categorization_enabled": project_data.auto_categorization_enabled,
             "plagiarism_detection_enabled": project_data.plagiarism_detection_enabled
-            # description, theme_desc are not in the schema provided by user, so skipping them or check if schema has jsonb?
-            # User schema didn't show 'description' or 'track_mode' columns. 
-            # I will assume standard columns provided in schema request.
         }
         
-        project_res = admin_supabase.table("projects").insert(project_payload).execute()
+        project_res = db_client.table("projects").insert(project_payload).execute()
         if not project_res.data:
              raise HTTPException(status_code=500, detail="Failed to create project in database.")
         
@@ -66,17 +62,17 @@ async def create_project_in_db(user, project_data: ProjectCreateRequest):
                 } for ps in project_data.problem_statements
             ]
             try:
-                ps_res = admin_supabase.table("problem_statements").insert(ps_payload).execute()
+                ps_res = db_client.table("problem_statements").insert(ps_payload).execute()
                 # Run embedding generation for these problem statements
                 try:
                     from app.services.embedding_service import embed_problem_statements
                     if ps_res.data:
+                        # Admin system process triggers embedding background pipeline
                         embed_problem_statements(project_id, ps_res.data)
                 except Exception as emb_e:
                     print(f"[Project Create] Embedding workflow failed: {emb_e}")
             except Exception as e:
                 print(f"[Project Create] Skipping problem_statements insert (table may not exist): {e}")
-
 
         # C. Insert Scoring Criteria (if any)
         if project_data.scoring_criteria:
@@ -88,10 +84,9 @@ async def create_project_in_db(user, project_data: ProjectCreateRequest):
                 } for sc in project_data.scoring_criteria
             ]
             try:
-                admin_supabase.table("scoring_criteria").insert(sc_payload).execute()
+                db_client.table("scoring_criteria").insert(sc_payload).execute()
             except Exception as e:
                 print(f"[Project Create] Skipping scoring_criteria insert (table may not exist): {e}")
-
 
         return {
             "project_id": project_id,
@@ -102,7 +97,4 @@ async def create_project_in_db(user, project_data: ProjectCreateRequest):
 
     except Exception as e:
         print(f"Database Creation Error: {str(e)}")
-        # In a real app, I would roll back the 'project' creation here if subsequent steps failed.
-        # Supabase API doesn't support complex transactions easily without stored procedures, 
-        # so for now we just report the error.
         raise HTTPException(status_code=500, detail=str(e))

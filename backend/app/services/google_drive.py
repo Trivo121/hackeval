@@ -49,15 +49,13 @@ async def list_files_in_folder(folder_id: str):
             return []
 
 
-async def scan_and_store_submissions(project_id: str, folder_id: str, drive_folder_url: str) -> dict:
+async def scan_and_store_submissions(project_id: str, folder_id: str, drive_folder_url: str, db_client) -> dict:
     """
     Scans a Google Drive folder for PDFs, parses team names from filenames,
-    and upserts each PDF as a 'pending' submission in the database.
+    and upserts each PDF as a 'pending' submission in the database securely using RLS.
 
     Returns: { "stored": N, "skipped": N, "total_found": N }
     """
-    from app.database import admin_supabase
-
     files = await list_files_in_folder(folder_id)
     if not files:
         return {"stored": 0, "skipped": 0, "total_found": 0}
@@ -85,7 +83,7 @@ async def scan_and_store_submissions(project_id: str, folder_id: str, drive_fold
         }
 
         try:
-            admin_supabase.table("submissions").upsert(
+            db_client.table("submissions").upsert(
                 payload, on_conflict="drive_file_id"
             ).execute()
             stored += 1

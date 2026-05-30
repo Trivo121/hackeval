@@ -4,16 +4,21 @@ from app.services.projects import create_project_in_db
 from app.services.google_drive import list_files_in_folder, scan_and_store_submissions
 from app.celery_app import celery_app
 from app.schemas import ProjectCreateRequest, ProjectResponse, ProcessingStartResponse, ParseRubricRequest
-from app.database import admin_supabase
+from app.database import get_user_client
+from supabase import Client
 import re
 import httpx
 import os
+
 router = APIRouter()
 
 @router.get("/projects")
-async def get_projects(current_user = Depends(get_current_user)):
-    """Fetch all projects owned by the current user."""
-    result = admin_supabase.table("projects") \
+async def get_projects(
+    current_user = Depends(get_current_user), 
+    db_client: Client = Depends(get_user_client)
+):
+    """Fetch all projects owned by the current user using the secure user client."""
+    result = db_client.table("projects") \
         .select("*") \
         .eq("owner_user_id", current_user.id) \
         .order("created_at", desc=True) \
@@ -21,10 +26,14 @@ async def get_projects(current_user = Depends(get_current_user)):
     return {"projects": result.data or []}
 
 @router.get("/projects/{project_id}/details")
-async def get_project_details(project_id: str, current_user = Depends(get_current_user)):
-    """Return project + all submissions + slide counts."""
+async def get_project_details(
+    project_id: str, 
+    current_user = Depends(get_current_user),
+    db_client: Client = Depends(get_user_client)
+):
+    """Return project + all submissions + slide counts securely."""
     project_res = (
-        admin_supabase.table("projects")
+        db_client.table("projects")
         .select("*")
         .eq("project_id", project_id)
         .eq("owner_user_id", current_user.id)
@@ -35,7 +44,7 @@ async def get_project_details(project_id: str, current_user = Depends(get_curren
         raise HTTPException(status_code=404, detail="Project not found.")
 
     submissions_res = (
-        admin_supabase.table("submissions")
+        db_client.table("submissions")
         .select("*")
         .eq("project_id", project_id)
         .order("created_at", desc=True)
@@ -46,7 +55,7 @@ async def get_project_details(project_id: str, current_user = Depends(get_curren
     # Attach slide count per submission
     for sub in submissions:
         slides_res = (
-            admin_supabase.table("submission_slides")
+            db_client.table("submission_slides")
             .select("slide_id", count="exact")
             .eq("submission_id", sub["submission_id"])
             .execute()
@@ -56,11 +65,15 @@ async def get_project_details(project_id: str, current_user = Depends(get_curren
     return {"project": project_res.data, "submissions": submissions}
 
 @router.post("/projects/create", response_model=ProjectResponse)
-async def create_project(project: ProjectCreateRequest, current_user = Depends(get_current_user)):
+async def create_project(
+    project: ProjectCreateRequest, 
+    current_user = Depends(get_current_user),
+    db_client: Client = Depends(get_user_client)
+):
     """
-    Create a new project.
+    Create a new project securely.
     """
-    return await create_project_in_db(current_user, project)
+    return await create_project_in_db(current_user, project, db_client)
 
 @router.get("/projects/scan-drive/{folder_id}")
 async def scan_folder(folder_id: str, current_user = Depends(get_current_user)):
@@ -121,14 +134,18 @@ Rubric text:
 
 
 @router.post("/projects/{project_id}/start-scan")
-async def start_scan(project_id: str, current_user = Depends(get_current_user)):
+async def start_scan(
+    project_id: str, 
+    current_user = Depends(get_current_user),
+    db_client: Client = Depends(get_user_client)
+):
     """
     Scans the project's Google Drive folder and persists all PDFs as
     'pending' submissions in the database. Called right after project creation.
     """
-    # Verify ownership and get drive_folder_url
+    # Verify ownership securely using user client
     project_res = (
-        admin_supabase.table("projects")
+        db_client.table("projects")
         .select("project_id, drive_folder_url")
         .eq("project_id", project_id)
         .eq("owner_user_id", current_user.id)
@@ -146,7 +163,7 @@ async def start_scan(project_id: str, current_user = Depends(get_current_user)):
         raise HTTPException(status_code=400, detail="Project has no valid Drive folder URL.")
 
     folder_id = match.group(1)
-    result = await scan_and_store_submissions(project_id, folder_id, drive_folder_url)
+    result = await scan_and_store_submissions(project_id, folder_id, drive_folder_url, db_client)
     return {
         "message": f"Scan complete. {result['stored']} submission(s) stored.",
         "project_id": project_id,
@@ -157,15 +174,15 @@ async def start_scan(project_id: str, current_user = Depends(get_current_user)):
 @router.post("/projects/{project_id}/start-processing", response_model=ProcessingStartResponse)
 async def start_processing(
     project_id: str,
-    current_user = Depends(get_current_user)
+    current_user = Depends(get_current_user),
+    db_client: Client = Depends(get_user_client)
 ):
     """
-    Kicks off background PDF processing for all pending submissions in this project.
-    Returns immediately with a count of queued submissions.
+    Kicks off background PDF processing securely for all pending submissions in this project.
     """
     # Verify project exists and belongs to this user
     project_res = (
-        admin_supabase.table("projects")
+        db_client.table("projects")
         .select("project_id, project_name, status")
         .eq("project_id", project_id)
         .eq("owner_user_id", current_user.id)
@@ -177,7 +194,7 @@ async def start_processing(
 
     # Fetch pending submissions so we can report back right away and queue them
     pending_res = (
-        admin_supabase.table("submissions")
+        db_client.table("submissions")
         .select("submission_id")
         .eq("project_id", project_id)
         .eq("processing_status", "pending")
@@ -194,32 +211,29 @@ async def start_processing(
             queued=0
         )
 
-    # For each pending submission: create the pdf_extraction job row FIRST, then fire Celery.
-    # This ensures _get_job_id_sync() inside the worker can find the row immediately.
+    # For each pending submission: create the pdf_extraction job row securely, then trigger Celery.
     for sub in pending_submissions:
         sub_id = sub["submission_id"]
         try:
-            # Upsert the pdf_extraction job row (Bug 3 fix: it was never created here before)
-            existing_job = admin_supabase.table("processing_jobs") \
+            # Check/Insert inside the user's security context
+            existing_job = db_client.table("processing_jobs") \
                 .select("job_id") \
                 .eq("submission_id", sub_id) \
                 .eq("job_type", "pdf_extraction") \
                 .execute()
             if not existing_job.data:
-                admin_supabase.table("processing_jobs").insert({
+                db_client.table("processing_jobs").insert({
                     "job_type": "pdf_extraction",
                     "submission_id": sub_id,
                     "project_id": project_id,
                     "status": "queued"
                 }).execute()
             else:
-                # Reset to queued if it already exists (e.g. after a reset-submissions)
-                admin_supabase.table("processing_jobs").update({"status": "queued"}) \
+                db_client.table("processing_jobs").update({"status": "queued"}) \
                     .eq("submission_id", sub_id) \
                     .eq("job_type", "pdf_extraction") \
                     .execute()
         except Exception as e:
-            # Non-fatal — worker will still run, just won't have job tracking
             print(f"[start-processing] WARNING: Could not upsert pdf_extraction job for {sub_id}: {e}")
 
         celery_app.send_task(
@@ -236,14 +250,16 @@ async def start_processing(
 
 
 @router.post("/projects/{project_id}/reset-submissions")
-async def reset_submissions(project_id: str, current_user = Depends(get_current_user)):
+async def reset_submissions(
+    project_id: str, 
+    current_user = Depends(get_current_user),
+    db_client: Client = Depends(get_user_client)
+):
     """
-    Reset all submissions to 'pending', wipe old slides + processing_jobs,
-    then immediately queue fresh extraction tasks — all in one call.
-    (Bug 1 fix: previously only reset status, never queued any tasks.)
+    Reset all submissions to 'pending', wipe old slides + processing_jobs securely.
     """
     project_res = (
-        admin_supabase.table("projects")
+        db_client.table("projects")
         .select("project_id")
         .eq("project_id", project_id)
         .eq("owner_user_id", current_user.id)
@@ -254,7 +270,7 @@ async def reset_submissions(project_id: str, current_user = Depends(get_current_
         raise HTTPException(status_code=404, detail="Project not found or access denied.")
 
     # 1. Fetch all submission IDs for this project
-    sub_ids_res = admin_supabase.table("submissions") \
+    sub_ids_res = db_client.table("submissions") \
         .select("submission_id") \
         .eq("project_id", project_id) \
         .execute()
@@ -264,29 +280,28 @@ async def reset_submissions(project_id: str, current_user = Depends(get_current_
         return {"message": "No submissions found.", "project_id": project_id, "queued": 0}
 
     # 2. Delete old slides
-    admin_supabase.table("submission_slides") \
+    db_client.table("submission_slides") \
         .delete() \
         .in_("submission_id", sub_ids) \
         .execute()
 
     # 3. Delete stale processing_jobs so progress tracking starts fresh
-    admin_supabase.table("processing_jobs") \
+    db_client.table("processing_jobs") \
         .delete() \
         .in_("submission_id", sub_ids) \
         .execute()
 
     # 4. Reset all submissions to 'pending'
-    admin_supabase.table("submissions") \
+    db_client.table("submissions") \
         .update({"processing_status": "pending"}) \
         .eq("project_id", project_id) \
         .execute()
 
     # 5. Create pdf_extraction job rows + queue Celery tasks
-    #    (Same logic as start-processing — Bug 1: this was completely missing before)
     queued = 0
     for sub_id in sub_ids:
         try:
-            admin_supabase.table("processing_jobs").insert({
+            db_client.table("processing_jobs").insert({
                 "job_type": "pdf_extraction",
                 "submission_id": sub_id,
                 "project_id": project_id,
@@ -310,10 +325,37 @@ async def reset_submissions(project_id: str, current_user = Depends(get_current_
 
 
 @router.get("/submissions/{submission_id}/slides")
-async def get_submission_slides(submission_id: str, current_user = Depends(get_current_user)):
-    """Return all extracted slide data for a submission, ordered by slide number."""
+async def get_submission_slides(
+    submission_id: str, 
+    current_user = Depends(get_current_user),
+    db_client: Client = Depends(get_user_client)
+):
+    """Return all extracted slide data for a submission, after verifying project ownership (IDOR Fix)."""
+    # Step 1: Fetch the submission to find its parent project_id
+    sub_res = (
+        db_client.table("submissions")
+        .select("project_id")
+        .eq("submission_id", submission_id)
+        .execute()
+    )
+    if not sub_res.data:
+        raise HTTPException(status_code=404, detail="Submission not found.")
+    
+    project_id = sub_res.data[0]["project_id"]
+
+    # Step 2: Verify the project belongs to the current user (IDOR prevention check)
+    project_res = (
+        db_client.table("projects")
+        .select("owner_user_id")
+        .eq("project_id", project_id)
+        .execute()
+    )
+    if not project_res.data or project_res.data[0]["owner_user_id"] != current_user.id:
+        raise HTTPException(status_code=403, detail="You do not have permission to access this submission's slides.")
+
+    # Step 3: Fetch and return slide data securely
     slides_res = (
-        admin_supabase.table("submission_slides")
+        db_client.table("submission_slides")
         .select("*")
         .eq("submission_id", submission_id)
         .order("slide_number")
@@ -321,32 +363,47 @@ async def get_submission_slides(submission_id: str, current_user = Depends(get_c
     )
     return {"slides": slides_res.data or []}
 
+
 @router.get("/projects/{project_id}/embedding-progress")
-async def get_embedding_progress(project_id: str, current_user = Depends(get_current_user)):
-    """Return real-time metrics on the extraction, embedding, and categorization progress."""
+async def get_embedding_progress(
+    project_id: str, 
+    current_user = Depends(get_current_user),
+    db_client: Client = Depends(get_user_client)
+):
+    """Return real-time metrics securely on embedding and categorization progress."""
     try:
+        # Verify project belongs to user first
+        project_res = (
+            db_client.table("projects")
+            .select("project_id")
+            .eq("project_id", project_id)
+            .eq("owner_user_id", current_user.id)
+            .single()
+            .execute()
+        )
+        if not project_res.data:
+            raise HTTPException(status_code=404, detail="Project not found or access denied.")
+
         # Total Submissions
-        total_res = admin_supabase.table("submissions").select("submission_id", count="exact").eq("project_id", project_id).execute()
+        total_res = db_client.table("submissions").select("submission_id", count="exact").eq("project_id", project_id).execute()
         total = total_res.count or 0
 
         if total == 0:
             return {"total_submissions": 0, "extraction_complete": 0, "embedding_complete": 0, "categorization_complete": 0}
 
         # Extracted (or higher)
-        extracted_res = admin_supabase.table("submissions").select("submission_id", count="exact").eq("project_id", project_id).neq("processing_status", "pending").execute()
-        # Anything past 'pending' (e.g., extracted, indexed, categorized) has been extracted
+        extracted_res = db_client.table("submissions").select("submission_id", count="exact").eq("project_id", project_id).neq("processing_status", "pending").execute()
         extracted = extracted_res.count or 0
 
-        # Categorized — 'completed' is the final status after auto-categorization runs
-        # ('categorized' was the old value but is NOT in the DB CHECK constraint)
-        cat_res = admin_supabase.table("submissions").select("submission_id", count="exact").eq("project_id", project_id).eq("processing_status", "completed").execute()
+        # Categorized
+        cat_res = db_client.table("submissions").select("submission_id", count="exact").eq("project_id", project_id).eq("processing_status", "completed").execute()
         categorized = cat_res.count or 0
 
-        # Embedded: look up processing_jobs where job_type='embedding' (not 'embed_submission_slides')
-        emb_res = admin_supabase.table("processing_jobs").select("job_id", count="exact").eq("project_id", project_id).eq("job_type", "embedding").eq("status", "completed").execute()
+        # Embedded
+        emb_res = db_client.table("processing_jobs").select("job_id", count="exact").eq("project_id", project_id).eq("job_type", "embedding").eq("status", "completed").execute()
         embedded = emb_res.count or 0
         
-        # Calculate ETA (rough estimate: 2s per remaining extraction, 2s per remaining embedding)
+        # Calculate ETA
         remaining_extracts = total - extracted
         remaining_embeds = total - embedded
         eta_seconds = (remaining_extracts * 2) + (remaining_embeds * 2)
@@ -359,14 +416,34 @@ async def get_embedding_progress(project_id: str, current_user = Depends(get_cur
             "eta_seconds": eta_seconds
         }
     except Exception as e:
+        if isinstance(e, HTTPException):
+            raise e
         raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/projects/{project_id}/recover-stuck")
-async def recover_stuck(project_id: str, current_user = Depends(get_current_user)):
-    """Re-queue any submission stuck in 'processing' for more than 30 minutes."""
+async def recover_stuck(
+    project_id: str, 
+    current_user = Depends(get_current_user),
+    db_client: Client = Depends(get_user_client)
+):
+    """Re-queue any submission stuck in 'processing' securely."""
     from datetime import datetime, timezone, timedelta
     cutoff = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
 
-    stuck = admin_supabase.table("submissions") \
+    # Verify project belongs to user
+    project_res = (
+        db_client.table("projects")
+        .select("project_id")
+        .eq("project_id", project_id)
+        .eq("owner_user_id", current_user.id)
+        .single()
+        .execute()
+    )
+    if not project_res.data:
+        raise HTTPException(status_code=404, detail="Project not found or access denied.")
+
+    stuck = db_client.table("submissions") \
         .select("submission_id") \
         .eq("project_id", project_id) \
         .eq("processing_status", "processing") \
@@ -375,7 +452,7 @@ async def recover_stuck(project_id: str, current_user = Depends(get_current_user
 
     requeued = 0
     for sub in (stuck.data or []):
-        admin_supabase.table("submissions").update({
+        db_client.table("submissions").update({
             "processing_status": "pending", "updated_at": datetime.now(timezone.utc).isoformat()
         }).eq("submission_id", sub["submission_id"]).execute()
         celery_app.send_task(
