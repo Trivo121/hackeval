@@ -1,12 +1,12 @@
 
 from fastapi import HTTPException, status, Header
 from typing import Optional
-from app.database import admin_supabase
-from supabase import Client
+from app.database import admin_supabase_async
+from supabase import AsyncClient
 
 async def get_current_user(authorization: str = Header(...)):
     """
-    Dependency to verify the Bearer token and return the user.
+    Dependency to verify the Bearer token asynchronously and return the user.
     """
     if not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Invalid token format")
@@ -14,8 +14,8 @@ async def get_current_user(authorization: str = Header(...)):
     token = authorization.split(" ")[1]
     
     try:
-        # Verify token with Supabase
-        user_response = admin_supabase.auth.get_user(token)
+        # Verify token asynchronously with Supabase
+        user_response = await admin_supabase_async.auth.get_user(token)
         if not user_response.user:
             raise HTTPException(status_code=401, detail="Invalid token")
             
@@ -24,9 +24,9 @@ async def get_current_user(authorization: str = Header(...)):
     except Exception as e:
         raise HTTPException(status_code=401, detail=str(e))
 
-def sync_user_to_db(user, db_client: Client):
+async def sync_user_to_db(user, db_client: AsyncClient):
     """
-    Syncs the authenticated Supabase user to our public.users table.
+    Syncs the authenticated Supabase user to our public.users table asynchronously.
     """
     try:
         # Extract user info
@@ -55,7 +55,7 @@ def sync_user_to_db(user, db_client: Client):
         }
 
         # Check if user already exists to preserve access_status
-        existing = db_client.table("users").select("*").eq("user_id", user_id).execute()
+        existing = await db_client.table("users").select("*").eq("user_id", user_id).execute()
         if existing.data:
             user_data["access_status"] = existing.data[0].get("access_status", "pending")
         else:
@@ -63,7 +63,7 @@ def sync_user_to_db(user, db_client: Client):
 
         # Upsert (Insert or Update)
         # on_conflict="user_id" tells Supabase which column to check for duplicates
-        response = db_client.table("users").upsert(
+        response = await db_client.table("users").upsert(
             user_data, on_conflict="user_id"
         ).execute()
         return response.data[0] if response.data else user_data
@@ -72,14 +72,14 @@ def sync_user_to_db(user, db_client: Client):
         print(f"Sync Error: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to sync user to database")
 
-def update_user_profile(user_id: str, updates, db_client: Client) -> dict:
+async def update_user_profile(user_id: str, updates, db_client: AsyncClient) -> dict:
     try:
         data = updates.model_dump(exclude_unset=True)
         if not data:
             return None
             
         print(f"Updating user {user_id} with data: {data}")
-        response = db_client.table("users").update(data).eq("user_id", user_id).execute()
+        response = await db_client.table("users").update(data).eq("user_id", user_id).execute()
         return response.data[0] if response.data else None
     except Exception as e:
         print(f"Error updating profile: {e}")

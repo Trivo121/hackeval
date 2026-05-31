@@ -1,33 +1,33 @@
 from fastapi import HTTPException
-from supabase import Client
+from supabase import AsyncClient
 from app.schemas import ProjectCreateRequest
 import re
 
-async def create_project_in_db(user, project_data: ProjectCreateRequest, db_client: Client):
+async def create_project_in_db(user, project_data: ProjectCreateRequest, db_client: AsyncClient):
     """
     Orchestrates the creation of a project, including validation and DB insertion.
-    Using the dynamic user-scoped db_client ensures RLS policies are strictly honored.
+    Using the dynamic user-scoped db_client ensures RLS policies are strictly honored asynchronously.
     """
     user_id = user.id
 
     # 1. VALIDATION LAYER
     
-    # Check 1: Project Name Uniqueness for this user (Checked securely using user's db_client)
-    existing_projects = db_client.table("projects").select("project_id").eq("owner_user_id", user_id).eq("project_name", project_data.project_name).execute()
+    # Check 1: Project Name Uniqueness for this user (Checked securely using user's db_client asynchronously)
+    existing_projects = await db_client.table("projects").select("project_id").eq("owner_user_id", user_id).eq("project_name", project_data.project_name).execute()
     if existing_projects.data:
          raise HTTPException(status_code=400, detail=f"A project with the name '{project_data.project_name}' already exists.")
 
     # Check 2: Scoring Weights Sum to 100
     if project_data.scoring_criteria:
-        total_weight = sum(c.weight for c in project_data.scoring_criteria)
-        if total_weight != 100:
-            raise HTTPException(status_code=400, detail=f"Scoring criteria weights must sum to 100. Current sum: {total_weight}")
+         total_weight = sum(c.weight for c in project_data.scoring_criteria)
+         if total_weight != 100:
+             raise HTTPException(status_code=400, detail=f"Scoring criteria weights must sum to 100. Current sum: {total_weight}")
 
     # Check 3: Google Drive URL Validation
     drive_pattern = r"drive\.google\.com\/drive\/folders\/([a-zA-Z0-9_-]+)"
     match = re.search(drive_pattern, project_data.drive_folder_url)
     if not match:
-        raise HTTPException(status_code=400, detail="Invalid Google Drive URL. Must be a folder link.")
+         raise HTTPException(status_code=400, detail="Invalid Google Drive URL. Must be a folder link.")
     drive_folder_id = match.group(1)
 
     # 2. DB OPERATIONS
@@ -45,7 +45,7 @@ async def create_project_in_db(user, project_data: ProjectCreateRequest, db_clie
             "plagiarism_detection_enabled": project_data.plagiarism_detection_enabled
         }
         
-        project_res = db_client.table("projects").insert(project_payload).execute()
+        project_res = await db_client.table("projects").insert(project_payload).execute()
         if not project_res.data:
              raise HTTPException(status_code=500, detail="Failed to create project in database.")
         
@@ -62,7 +62,7 @@ async def create_project_in_db(user, project_data: ProjectCreateRequest, db_clie
                 } for ps in project_data.problem_statements
             ]
             try:
-                ps_res = db_client.table("problem_statements").insert(ps_payload).execute()
+                ps_res = await db_client.table("problem_statements").insert(ps_payload).execute()
                 # Run embedding generation for these problem statements
                 try:
                     from app.services.embedding_service import embed_problem_statements
@@ -84,7 +84,7 @@ async def create_project_in_db(user, project_data: ProjectCreateRequest, db_clie
                 } for sc in project_data.scoring_criteria
             ]
             try:
-                db_client.table("scoring_criteria").insert(sc_payload).execute()
+                await db_client.table("scoring_criteria").insert(sc_payload).execute()
             except Exception as e:
                 print(f"[Project Create] Skipping scoring_criteria insert (table may not exist): {e}")
 

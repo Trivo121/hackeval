@@ -83,7 +83,7 @@ async def scan_and_store_submissions(project_id: str, folder_id: str, drive_fold
         }
 
         try:
-            db_client.table("submissions").upsert(
+            await db_client.table("submissions").upsert(
                 payload, on_conflict="drive_file_id"
             ).execute()
             stored += 1

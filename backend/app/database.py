@@ -1,6 +1,6 @@
 # backend/app/database.py
 import os
-from supabase import create_client, Client
+from supabase import create_client, Client, AsyncClient
 from fastapi import Security, HTTPException
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
@@ -57,17 +57,18 @@ def _validate_supabase_keys():
 # Run strict startup validations
 _validate_supabase_keys()
 
-# 1. Admin Client - USE ONLY FOR ADMIN/BACKGROUND TASKS
+# 1. Admin Clients
 admin_supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+admin_supabase_async: AsyncClient = AsyncClient(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
 # 2. Setup token extraction
 security = HTTPBearer()
 
 # 3. New Dependency: User-Scoped Client (Enforces RLS)
-def get_user_client(credentials: HTTPAuthorizationCredentials = Security(security)) -> Client:
+def get_user_client(credentials: HTTPAuthorizationCredentials = Security(security)) -> AsyncClient:
     """
     Creates a Supabase client that enforces Row Level Security (RLS) 
-    by injecting the authenticated user's JWT token.
+    by injecting the authenticated user's JWT token asynchronously.
     """
     token = credentials.credentials
     
@@ -75,7 +76,7 @@ def get_user_client(credentials: HTTPAuthorizationCredentials = Security(securit
         raise HTTPException(status_code=401, detail="Authentication token missing")
 
     # Initialize with the Anon Key (which tells PostgREST to respect RLS)
-    user_client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+    user_client = AsyncClient(SUPABASE_URL, SUPABASE_ANON_KEY)
     
     # Inject the user's JWT token so the database knows exactly who is making the request
     user_client.postgrest.auth(token)

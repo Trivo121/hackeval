@@ -5,7 +5,7 @@ from app.services.google_drive import list_files_in_folder, scan_and_store_submi
 from app.celery_app import celery_app
 from app.schemas import ProjectCreateRequest, ProjectResponse, ProcessingStartResponse, ParseRubricRequest
 from app.database import get_user_client
-from supabase import Client
+from supabase import AsyncClient
 import re
 import httpx
 import os
@@ -15,10 +15,10 @@ router = APIRouter()
 @router.get("/projects")
 async def get_projects(
     current_user = Depends(get_current_user), 
-    db_client: Client = Depends(get_user_client)
+    db_client: AsyncClient = Depends(get_user_client)
 ):
     """Fetch all projects owned by the current user using the secure user client."""
-    result = db_client.table("projects") \
+    result = await db_client.table("projects") \
         .select("*") \
         .eq("owner_user_id", current_user.id) \
         .order("created_at", desc=True) \
@@ -29,22 +29,23 @@ async def get_projects(
 async def get_project_details(
     project_id: str, 
     current_user = Depends(get_current_user),
-    db_client: Client = Depends(get_user_client)
+    db_client: AsyncClient = Depends(get_user_client)
 ):
     """Return project + all submissions + slide counts securely."""
     project_res = (
-        db_client.table("projects")
+        await db_client.table("projects")
         .select("*")
         .eq("project_id", project_id)
         .eq("owner_user_id", current_user.id)
         .single()
         .execute()
     )
+
     if not project_res.data:
         raise HTTPException(status_code=404, detail="Project not found.")
 
     submissions_res = (
-        db_client.table("submissions")
+        await db_client.table("submissions")
         .select("*")
         .eq("project_id", project_id)
         .order("created_at", desc=True)
@@ -55,7 +56,7 @@ async def get_project_details(
     # Attach slide count per submission
     for sub in submissions:
         slides_res = (
-            db_client.table("submission_slides")
+            await db_client.table("submission_slides")
             .select("slide_id", count="exact")
             .eq("submission_id", sub["submission_id"])
             .execute()
@@ -68,7 +69,7 @@ async def get_project_details(
 async def create_project(
     project: ProjectCreateRequest, 
     current_user = Depends(get_current_user),
-    db_client: Client = Depends(get_user_client)
+    db_client: AsyncClient = Depends(get_user_client)
 ):
     """
     Create a new project securely.
@@ -137,7 +138,7 @@ Rubric text:
 async def start_scan(
     project_id: str, 
     current_user = Depends(get_current_user),
-    db_client: Client = Depends(get_user_client)
+    db_client: AsyncClient = Depends(get_user_client)
 ):
     """
     Scans the project's Google Drive folder and persists all PDFs as
@@ -145,7 +146,7 @@ async def start_scan(
     """
     # Verify ownership securely using user client
     project_res = (
-        db_client.table("projects")
+        await db_client.table("projects")
         .select("project_id, drive_folder_url")
         .eq("project_id", project_id)
         .eq("owner_user_id", current_user.id)
@@ -175,14 +176,14 @@ async def start_scan(
 async def start_processing(
     project_id: str,
     current_user = Depends(get_current_user),
-    db_client: Client = Depends(get_user_client)
+    db_client: AsyncClient = Depends(get_user_client)
 ):
     """
     Kicks off background PDF processing securely for all pending submissions in this project.
     """
     # Verify project exists and belongs to this user
     project_res = (
-        db_client.table("projects")
+        await db_client.table("projects")
         .select("project_id, project_name, status")
         .eq("project_id", project_id)
         .eq("owner_user_id", current_user.id)
@@ -194,7 +195,7 @@ async def start_processing(
 
     # Fetch pending submissions so we can report back right away and queue them
     pending_res = (
-        db_client.table("submissions")
+        await db_client.table("submissions")
         .select("submission_id")
         .eq("project_id", project_id)
         .eq("processing_status", "pending")
@@ -216,20 +217,20 @@ async def start_processing(
         sub_id = sub["submission_id"]
         try:
             # Check/Insert inside the user's security context
-            existing_job = db_client.table("processing_jobs") \
+            existing_job = await db_client.table("processing_jobs") \
                 .select("job_id") \
                 .eq("submission_id", sub_id) \
                 .eq("job_type", "pdf_extraction") \
                 .execute()
             if not existing_job.data:
-                db_client.table("processing_jobs").insert({
+                await db_client.table("processing_jobs").insert({
                     "job_type": "pdf_extraction",
                     "submission_id": sub_id,
                     "project_id": project_id,
                     "status": "queued"
                 }).execute()
             else:
-                db_client.table("processing_jobs").update({"status": "queued"}) \
+                await db_client.table("processing_jobs").update({"status": "queued"}) \
                     .eq("submission_id", sub_id) \
                     .eq("job_type", "pdf_extraction") \
                     .execute()
@@ -253,13 +254,13 @@ async def start_processing(
 async def reset_submissions(
     project_id: str, 
     current_user = Depends(get_current_user),
-    db_client: Client = Depends(get_user_client)
+    db_client: AsyncClient = Depends(get_user_client)
 ):
     """
     Reset all submissions to 'pending', wipe old slides + processing_jobs securely.
     """
     project_res = (
-        db_client.table("projects")
+        await db_client.table("projects")
         .select("project_id")
         .eq("project_id", project_id)
         .eq("owner_user_id", current_user.id)
@@ -270,7 +271,7 @@ async def reset_submissions(
         raise HTTPException(status_code=404, detail="Project not found or access denied.")
 
     # 1. Fetch all submission IDs for this project
-    sub_ids_res = db_client.table("submissions") \
+    sub_ids_res = await db_client.table("submissions") \
         .select("submission_id") \
         .eq("project_id", project_id) \
         .execute()
@@ -280,19 +281,19 @@ async def reset_submissions(
         return {"message": "No submissions found.", "project_id": project_id, "queued": 0}
 
     # 2. Delete old slides
-    db_client.table("submission_slides") \
+    await db_client.table("submission_slides") \
         .delete() \
         .in_("submission_id", sub_ids) \
         .execute()
 
     # 3. Delete stale processing_jobs so progress tracking starts fresh
-    db_client.table("processing_jobs") \
+    await db_client.table("processing_jobs") \
         .delete() \
         .in_("submission_id", sub_ids) \
         .execute()
 
     # 4. Reset all submissions to 'pending'
-    db_client.table("submissions") \
+    await db_client.table("submissions") \
         .update({"processing_status": "pending"}) \
         .eq("project_id", project_id) \
         .execute()
@@ -301,7 +302,7 @@ async def reset_submissions(
     queued = 0
     for sub_id in sub_ids:
         try:
-            db_client.table("processing_jobs").insert({
+            await db_client.table("processing_jobs").insert({
                 "job_type": "pdf_extraction",
                 "submission_id": sub_id,
                 "project_id": project_id,
@@ -328,12 +329,12 @@ async def reset_submissions(
 async def get_submission_slides(
     submission_id: str, 
     current_user = Depends(get_current_user),
-    db_client: Client = Depends(get_user_client)
+    db_client: AsyncClient = Depends(get_user_client)
 ):
     """Return all extracted slide data for a submission, after verifying project ownership (IDOR Fix)."""
     # Step 1: Fetch the submission to find its parent project_id
     sub_res = (
-        db_client.table("submissions")
+        await db_client.table("submissions")
         .select("project_id")
         .eq("submission_id", submission_id)
         .execute()
@@ -345,7 +346,7 @@ async def get_submission_slides(
 
     # Step 2: Verify the project belongs to the current user (IDOR prevention check)
     project_res = (
-        db_client.table("projects")
+        await db_client.table("projects")
         .select("owner_user_id")
         .eq("project_id", project_id)
         .execute()
@@ -355,7 +356,7 @@ async def get_submission_slides(
 
     # Step 3: Fetch and return slide data securely
     slides_res = (
-        db_client.table("submission_slides")
+        await db_client.table("submission_slides")
         .select("*")
         .eq("submission_id", submission_id)
         .order("slide_number")
@@ -368,13 +369,13 @@ async def get_submission_slides(
 async def get_embedding_progress(
     project_id: str, 
     current_user = Depends(get_current_user),
-    db_client: Client = Depends(get_user_client)
+    db_client: AsyncClient = Depends(get_user_client)
 ):
     """Return real-time metrics securely on embedding and categorization progress."""
     try:
         # Verify project belongs to user first
         project_res = (
-            db_client.table("projects")
+            await db_client.table("projects")
             .select("project_id")
             .eq("project_id", project_id)
             .eq("owner_user_id", current_user.id)
@@ -385,22 +386,22 @@ async def get_embedding_progress(
             raise HTTPException(status_code=404, detail="Project not found or access denied.")
 
         # Total Submissions
-        total_res = db_client.table("submissions").select("submission_id", count="exact").eq("project_id", project_id).execute()
+        total_res = await db_client.table("submissions").select("submission_id", count="exact").eq("project_id", project_id).execute()
         total = total_res.count or 0
 
         if total == 0:
             return {"total_submissions": 0, "extraction_complete": 0, "embedding_complete": 0, "categorization_complete": 0}
 
         # Extracted (or higher)
-        extracted_res = db_client.table("submissions").select("submission_id", count="exact").eq("project_id", project_id).neq("processing_status", "pending").execute()
+        extracted_res = await db_client.table("submissions").select("submission_id", count="exact").eq("project_id", project_id).neq("processing_status", "pending").execute()
         extracted = extracted_res.count or 0
 
         # Categorized
-        cat_res = db_client.table("submissions").select("submission_id", count="exact").eq("project_id", project_id).eq("processing_status", "completed").execute()
+        cat_res = await db_client.table("submissions").select("submission_id", count="exact").eq("project_id", project_id).eq("processing_status", "completed").execute()
         categorized = cat_res.count or 0
 
         # Embedded
-        emb_res = db_client.table("processing_jobs").select("job_id", count="exact").eq("project_id", project_id).eq("job_type", "embedding").eq("status", "completed").execute()
+        emb_res = await db_client.table("processing_jobs").select("job_id", count="exact").eq("project_id", project_id).eq("job_type", "embedding").eq("status", "completed").execute()
         embedded = emb_res.count or 0
         
         # Calculate ETA
@@ -425,7 +426,7 @@ async def get_embedding_progress(
 async def recover_stuck(
     project_id: str, 
     current_user = Depends(get_current_user),
-    db_client: Client = Depends(get_user_client)
+    db_client: AsyncClient = Depends(get_user_client)
 ):
     """Re-queue any submission stuck in 'processing' securely."""
     from datetime import datetime, timezone, timedelta
@@ -433,7 +434,7 @@ async def recover_stuck(
 
     # Verify project belongs to user
     project_res = (
-        db_client.table("projects")
+        await db_client.table("projects")
         .select("project_id")
         .eq("project_id", project_id)
         .eq("owner_user_id", current_user.id)
@@ -443,7 +444,7 @@ async def recover_stuck(
     if not project_res.data:
         raise HTTPException(status_code=404, detail="Project not found or access denied.")
 
-    stuck = db_client.table("submissions") \
+    stuck = await db_client.table("submissions") \
         .select("submission_id") \
         .eq("project_id", project_id) \
         .eq("processing_status", "processing") \
@@ -452,7 +453,7 @@ async def recover_stuck(
 
     requeued = 0
     for sub in (stuck.data or []):
-        db_client.table("submissions").update({
+        await db_client.table("submissions").update({
             "processing_status": "pending", "updated_at": datetime.now(timezone.utc).isoformat()
         }).eq("submission_id", sub["submission_id"]).execute()
         celery_app.send_task(
