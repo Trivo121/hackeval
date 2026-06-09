@@ -326,24 +326,42 @@ def auto_categorize_project_task(self, project_id: str):
                 _trigger_evaluation_task(sub_id, project_id)
                 continue
                 
-            # Average vectors
-            vectors = [pt.vector["text"] for pt in slide_results]
-            sub_vector = np.mean(vectors, axis=0)
-            
-            # Cosine Sim
+            # Pre-calculate slide vectors and norms to optimize cosine calculations
+            slide_vectors = []
+            for pt in slide_results:
+                vec = np.array(pt.vector["text"])
+                norm = np.linalg.norm(vec)
+                if norm > 0:
+                    slide_vectors.append((vec, norm))
+
+            # Cosine Sim via Top-2 Slide Average
             best_ps_id = None
             best_score = -1.0
             
             for ps_pt in ps_results:
+                ps_id = ps_pt.payload.get("statement_id")
                 ps_vec = np.array(ps_pt.vector["text"])
-                # cos_sim = dot(u,v) / (norm(u)*norm(v))
-                cos_sim = np.dot(sub_vector, ps_vec) / (np.linalg.norm(sub_vector) * np.linalg.norm(ps_vec))
-                if cos_sim > best_score:
-                    best_score = cos_sim
-                    best_ps_id = ps_pt.payload.get("statement_id")
+                ps_norm = np.linalg.norm(ps_vec)
+                
+                if ps_norm <= 0:
+                    continue
+                
+                slide_sims = []
+                for slide_vec, slide_norm in slide_vectors:
+                    cos_sim = np.dot(slide_vec, ps_vec) / (slide_norm * ps_norm)
+                    slide_sims.append(cos_sim)
+                
+                # Strategy B: Average of the Top-2 highest-scoring slides
+                top_scores = sorted(slide_sims, reverse=True)[:2]
+                track_score = np.mean(top_scores) if top_scores else -1.0
+                
+                if track_score > best_score:
+                    best_score = track_score
+                    best_ps_id = ps_id
             
             # Apply threshold for Open Innovation vs Specific Problem Statement
-            SIMILARITY_THRESHOLD = 0.35  # Adjust as needed based on empirical data
+            # Recalibrated to 0.45 since top-2 slide averages are naturally higher than diluted centroids
+            SIMILARITY_THRESHOLD = 0.45
             
             # Keep processing_status = processing
             payload = {"processing_status": "processing"}
