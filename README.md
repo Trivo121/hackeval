@@ -3,6 +3,7 @@
 # HackEval 🚀
 ### Intelligent Hackathon Submission Evaluation & Management System
 
+[![CI](https://github.com/Trivo121/hackeval/actions/workflows/ci.yml/badge.svg)](https://github.com/Trivo121/hackeval/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=flat-square)](CONTRIBUTING.md)
 [![GitHub contributors](https://img.shields.io/github/contributors/Trivo121/hackeval)](https://github.com/Trivo121/hackeval/graphs/contributors)

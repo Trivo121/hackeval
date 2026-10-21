@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Cancel superseded runs on the same branch/PR instead of queueing them.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Backend (lint + compile)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # Only ruff is installed. The runtime requirements (torch via
+      # sentence-transformers, easyocr, docling) are multi-gigabyte and would
+      # make every run slow and flaky, so they are deliberately not installed
+      # here. Import-level testing needs them and is tracked separately.
+      - name: Install ruff
+        run: pip install ruff==0.17.1
+
+      # Hard gate: real breakage only -- syntax errors (E9), undefined names
+      # and misuse that is almost always a bug (F63, F7, F82).
+      - name: Check for syntax errors and undefined names
+        run: ruff check backend/app --select=E9,F63,F7,F82 --output-format=github
+
+      # Advisory: style and unused-import findings are surfaced as annotations
+      # but never fail the build, so a first-time contributor is not blocked
+      # by a pre-existing unused import.
+      - name: Full lint (advisory)
+        run: ruff check backend/app --exit-zero --output-format=github
+
+      # Validates against the real CPython parser, which ruff's own parser
+      # does not fully substitute for.
+      - name: Byte-compile backend modules
+        run: python -m compileall -q backend/app
+
+  frontend:
+    name: Frontend (build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Production build
+        run: npm run build
+        env:
+          # create-react-app promotes every ESLint warning to a build error
+          # when CI is truthy, which GitHub Actions sets by default. The build
+          # should fail on real compile errors, not on an unused variable.
+          CI: false
